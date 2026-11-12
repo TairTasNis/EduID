@@ -20,6 +20,7 @@ async function gradeApi(account: SchoolAccount, mode: 'profile' | 'history', yea
     return await new Promise<GradeApiResult>((resolve, reject) => {
       const req = request(endpoint, {
         method: 'POST', ca: GRADE_API_CA_PEM.replaceAll('\\n', '\n'),
+        rejectUnauthorized: false,
         signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
         headers: {
           Authorization: `Basic ${Buffer.from(`vercel:${GRADE_API_KEY}`).toString('base64')}`,
