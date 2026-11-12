@@ -375,9 +375,11 @@ function parseGradesForPeriod(gradesMap: Record<string, unknown>, year: string, 
   } else if (Array.isArray(data.periods)) {
     // BilimClass structure check
     const period = data.periods.find((p: any) =>
-      Number(p.quarter) === quarter ||
-      (typeof p.quarterLabel === 'string' && p.quarterLabel.includes(String(quarter))) ||
-      (typeof p.name === 'string' && p.name.includes(String(quarter)))
+      Array.isArray(p?.subjects) && p.subjects.length > 0 && (
+        Number(p.quarter) === quarter ||
+        (typeof p.quarterLabel === 'string' && p.quarterLabel.includes(String(quarter))) ||
+        (typeof p.name === 'string' && p.name.includes(String(quarter)))
+      )
     );
     if (period && Array.isArray(period.subjects)) {
       subjectsRaw = period.subjects;
@@ -397,7 +399,23 @@ function parseGradesForPeriod(gradesMap: Record<string, unknown>, year: string, 
     subjectsRaw = data.subjects;
   }
 
-  return subjectsRaw.map(s => normalizeSubject(s, source));
+  const subjects = subjectsRaw.map(s => normalizeSubject(s, source));
+  const report = data.grades?.report ?? data.report;
+  if (source !== 'sush' || !Array.isArray(report)) return subjects;
+
+  for (const row of report) {
+    const mark = String(row?.[`q${quarter}`] ?? '').trim();
+    if (!/^[1-5]$/.test(mark) || typeof row?.subject !== 'string' || !row.subject.trim()) continue;
+    const subject = subjects.find(item => item.name.trim().toLowerCase() === row.subject.trim().toLowerCase());
+    if (subject) subject.quarterGrade ??= mark;
+    else subjects.push(normalizeSubject({ subject: row.subject, mark }, source));
+  }
+  return subjects;
+}
+
+function hasGrades(subjects: NormalizedSubject[]) {
+  return subjects.some(subject => subject.quarterGrade != null || subject.finalPercent !== null ||
+    subject.sorPercent !== null || subject.sochPercent !== null || subject.formativeMarks.length > 0);
 }
 
 async function readResponse(response: Response) {
@@ -440,8 +458,8 @@ export function Access() {
   const [grades, setGrades] = useState<Record<string, unknown>>({});
   const [achievements, setAchievements] = useState<Record<string, Achievement>>({});
   const [notifications, setNotifications] = useState<Record<string, NotificationItem>>({});
-  const [selectedYear, setSelectedYear] = useState<string>('');
-  const [selectedQuarter, setSelectedQuarter] = useState<number>(1);
+  const [preferredYear, setPreferredYear] = useState('');
+  const [preferredQuarter, setPreferredQuarter] = useState<number | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardItem[]>([]);
   const [userRank, setUserRank] = useState<number | null>(null);
   const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
@@ -529,17 +547,17 @@ export function Access() {
     return keys.sort((a, b) => Number(b) - Number(a));
   }, [grades]);
 
-  useEffect(() => {
-    if (availableYears.length > 0 && (!selectedYear || !availableYears.includes(selectedYear))) {
-      setSelectedYear(availableYears[0]);
-    }
-  }, [availableYears, selectedYear]);
-
-  // Normalized subjects for selected year & quarter
-  const currentSubjects = useMemo(() => {
-    if (!selectedYear) return [];
-    return parseGradesForPeriod(grades, selectedYear, selectedQuarter, profile?.source || 'bilimclass');
-  }, [grades, selectedYear, selectedQuarter, profile?.source]);
+  const subjectsByYear = useMemo(() => new Map(availableYears.map(year => [year,
+    [1, 2, 3, 4].map(quarter => parseGradesForPeriod(grades, year, quarter, profile?.source || 'bilimclass')),
+  ])), [availableYears, grades, profile?.source]);
+  const selectedYear = availableYears.includes(preferredYear) ? preferredYear :
+    availableYears.find(year => subjectsByYear.get(year)?.some(hasGrades)) ??
+    availableYears.find(year => subjectsByYear.get(year)?.some(subjects => subjects.length > 0)) ?? availableYears[0] ?? '';
+  const yearSubjects = subjectsByYear.get(selectedYear);
+  const latestGradedQuarter = yearSubjects?.findLastIndex(hasGrades) ?? -1;
+  const latestQuarterWithSubjects = yearSubjects?.findLastIndex(subjects => subjects.length > 0) ?? -1;
+  const selectedQuarter = preferredQuarter ?? (latestGradedQuarter >= 0 ? latestGradedQuarter + 1 : Math.max(1, latestQuarterWithSubjects + 1));
+  const currentSubjects = yearSubjects?.[selectedQuarter - 1] ?? [];
 
   // Best subject for selected quarter
   const subjectsWithGrades = useMemo(() => currentSubjects.filter(s => s.finalPercent !== null && s.finalPercent > 0), [currentSubjects]);
@@ -552,10 +570,8 @@ export function Access() {
   // Overall average percentage across ALL available years and ALL quarters
   const allAvailableFinalPercentages = useMemo(() => {
     const all: number[] = [];
-    if (!grades) return all;
-    for (const year of Object.keys(grades)) {
-      for (let q = 1; q <= 4; q++) {
-        const subs = parseGradesForPeriod(grades, year, q, profile?.source || 'bilimclass');
+    for (const yearSubjects of subjectsByYear.values()) {
+      for (const subs of yearSubjects) {
         for (const s of subs) {
           if (typeof s.finalPercent === 'number' && !isNaN(s.finalPercent) && s.finalPercent > 0) {
             all.push(s.finalPercent);
@@ -564,7 +580,7 @@ export function Access() {
       }
     }
     return all;
-  }, [grades, profile?.source]);
+  }, [subjectsByYear]);
 
   const overallAveragePercent = useMemo(() => {
     if (!allAvailableFinalPercentages.length) return null;
@@ -1443,7 +1459,7 @@ export function Access() {
                       className="filter-select"
                       aria-label="Выбор учебного года"
                       value={selectedYear}
-                      onChange={e => setSelectedYear(e.target.value)}
+                      onChange={e => { setPreferredYear(e.target.value); setPreferredQuarter(null); }}
                     >
                       {availableYears.length > 0 ? (
                         availableYears.map(yr => (
@@ -1461,7 +1477,7 @@ export function Access() {
                       className="filter-select"
                       aria-label="Выбор четверти"
                       value={selectedQuarter}
-                      onChange={e => setSelectedQuarter(Number(e.target.value))}
+                      onChange={e => setPreferredQuarter(Number(e.target.value))}
                     >
                       <option value={1}>1-я четверть</option>
                       <option value={2}>2-я четверть</option>
@@ -1571,7 +1587,7 @@ export function Access() {
                                     {pct}% {sub.quarterGrade ? `(${sub.quarterGrade})` : ''}
                                   </span>
                                 ) : (
-                                  <span style={{ color: 'var(--muted)' }}>—</span>
+                                  <span style={{ color: 'var(--muted)' }}>{sub.quarterGrade ?? '—'}</span>
                                 )}
                               </td>
                             </tr>
