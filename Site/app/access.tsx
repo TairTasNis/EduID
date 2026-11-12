@@ -950,7 +950,7 @@ export function Access() {
     try {
       if (audience === 'student') {
         const response = await fetch('/api/student', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: mode, source, login: fields.get('login'), password, region: fields.get('region'), consent: fields.has('consent') }) });
+          body: JSON.stringify({ action: mode, source, login: fields.get('login'), password, region: fields.get('region') || undefined, consent: fields.has('consent') }) });
         const { token, profile: loadedProfile } = await readResponse(response);
         await signInWithCustomToken(auth, token);
         setProfile(loadedProfile);
