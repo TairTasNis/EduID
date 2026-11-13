@@ -1325,11 +1325,12 @@ export function Access() {
                 {/* Таблица оценок */}
                 <div className="table-card">
                   {currentSubjects.length > 0 ? (
-                    <table className="grades-table school-grades-table" role="table">
+                    <table className="grades-table school-grades-table" role="table" data-source={profile?.source}>
                       <thead>
                         <tr>
                           <th>Предмет</th>
                           {profile?.source === 'bilimclass' && <th>ФО (баллы)</th>}
+                          {profile?.source === 'bilimclass' && <th scope="col">ФО, %</th>}
                           <th>СОР</th>
                           <th>СОЧ</th>
                           <th>Итоговый %</th>
@@ -1361,6 +1362,13 @@ export function Access() {
                                   ) : (
                                     <span style={{ color: 'var(--muted)' }}>—</span>
                                   )}
+                                </td>
+                              )}
+                              {profile?.source === 'bilimclass' && (
+                                <td data-label="ФО, %">
+                                  {sub.formativePercent !== null
+                                    ? <span className="percent-pill">{sub.formativePercent}%</span>
+                                    : <span className="grade-missing">—</span>}
                                 </td>
                               )}
                               <td data-label="СОР">

@@ -155,6 +155,7 @@
     border-bottom: 1px solid var(--line);
   }
   .school-grades-table tbody tr:last-child { border-bottom: 0; }
+  .school-grades-table[data-source="bilimclass"] tbody tr { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .school-grades-table td { display: block; padding: 0; border: 0; }
   .school-grades-table td[data-label]::before {
     content: attr(data-label);

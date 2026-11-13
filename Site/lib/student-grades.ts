@@ -271,7 +271,7 @@ export function parseGradesForPeriod(gradesMap: Record<string, unknown>, year: s
 
 export function hasGrades(subjects: NormalizedSubject[]) {
   return subjects.some(subject => subject.quarterGrade != null || subject.finalPercent !== null ||
-    subject.sorPercent !== null || subject.sochPercent !== null || subject.formativeMarks.length > 0 ||
+    subject.formativePercent !== null || subject.sorPercent !== null || subject.sochPercent !== null || subject.formativeMarks.length > 0 ||
     subject.sorMarks.length > 0 || subject.sochMarks.length > 0);
 }
 

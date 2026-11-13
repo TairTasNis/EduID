@@ -437,6 +437,9 @@ h1 { margin: 0; font-size: clamp(30px, 3vw, 43px); font-weight: 655; letter-spac
 }
 
 .gauge-svg {
+  position: absolute;
+  inset: 0;
+  display: block;
   width: 100%;
   height: 100%;
   transform: rotate(-90deg);
@@ -463,6 +466,10 @@ h1 { margin: 0; font-size: clamp(30px, 3vw, 43px); font-weight: 655; letter-spac
   justify-content: center;
   font-size: 1.125rem;
   font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+  padding-block-end: .1em;
   letter-spacing: -0.03em;
   color: var(--ink);
 }
