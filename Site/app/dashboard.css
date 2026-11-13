@@ -83,7 +83,7 @@
 .ranking-columns { color: #526579; background: #f5f8fb; font-size: .76rem; font-weight: 620; }
 .ranking-columns > :nth-child(n+3), .ranking-gauge, .ranking-achievements, .ranking-score { text-align: center; }
 .ranking-list { margin: 0; padding: 0; list-style: none; }
-.ranking-row { min-block-size: 4.6rem; }
+.ranking-row { padding-block: .375rem; }
 .ranking-row.current-user-row { background: #edf5fc; box-shadow: inset 3px 0 #24659c; }
 .ranking-identity { display: flex; align-items: center; gap: .65rem; min-width: 0; font-size: .9rem; }
 .ranking-identity > div { min-width: 0; }
@@ -91,8 +91,8 @@
 .ranking-identity .you-pill { display: inline-block; margin-inline-start: .4rem; }
 .ranking-position, .ranking-achievements, .ranking-score { font-variant-numeric: tabular-nums; }
 .ranking-position { color: var(--blue); font-weight: 700; font-size: .88rem; }
-.ranking-gauge .gauge-wrapper { margin-inline: auto; width: 4.25rem; }
-.ranking-gauge .gauge-text { font-size: .95rem; }
+.ranking-gauge .gauge-wrapper { margin-inline: auto; width: 2.75rem; }
+.ranking-gauge .gauge-text { font-size: .75rem; }
 .ranking-metric-label {
   position: absolute;
   width: 1px;
@@ -127,13 +127,11 @@
     grid-template-columns: minmax(2.35rem, auto) minmax(0, 1fr) auto;
     grid-template-areas: "position identity gauge" ". achievements score";
     gap: .55rem .65rem;
-    padding: .75rem 1rem;
+    padding: .55rem 1rem;
   }
   .ranking-position { grid-area: position; }
   .ranking-identity { grid-area: identity; }
   .ranking-gauge { grid-area: gauge; }
-  .ranking-gauge .gauge-wrapper { width: 3.5rem; }
-  .ranking-gauge .gauge-text { font-size: .8rem; }
   .ranking-achievements { grid-area: achievements; }
   .ranking-score { grid-area: score; }
   .ranking-achievements, .ranking-score { display: grid; justify-items: start; text-align: start; gap: .2rem; }
