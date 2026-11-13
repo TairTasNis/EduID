@@ -91,7 +91,8 @@
 .ranking-identity .you-pill { display: inline-block; margin-inline-start: .4rem; }
 .ranking-position, .ranking-achievements, .ranking-score { font-variant-numeric: tabular-nums; }
 .ranking-position { color: var(--blue); font-weight: 700; font-size: .88rem; }
-.ranking-gauge .gauge-wrapper { margin-inline: auto; }
+.ranking-gauge .gauge-wrapper { margin-inline: auto; width: 4.25rem; }
+.ranking-gauge .gauge-text { font-size: .95rem; }
 .ranking-metric-label {
   position: absolute;
   width: 1px;
@@ -131,6 +132,8 @@
   .ranking-position { grid-area: position; }
   .ranking-identity { grid-area: identity; }
   .ranking-gauge { grid-area: gauge; }
+  .ranking-gauge .gauge-wrapper { width: 3.5rem; }
+  .ranking-gauge .gauge-text { font-size: .8rem; }
   .ranking-achievements { grid-area: achievements; }
   .ranking-score { grid-area: score; }
   .ranking-achievements, .ranking-score { display: grid; justify-items: start; text-align: start; gap: .2rem; }

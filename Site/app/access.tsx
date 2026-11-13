@@ -7,7 +7,7 @@ import { onValue, ref, update } from 'firebase/database';
 import { corporateEmail, documentTypes, KAZAKHSTAN_REGIONS, maxDocumentBytes, organizationTypes, providers,
   type ImportStatus, type OrganizationStatus, type SchoolSource, type StudentProfile } from '@/lib/contracts';
 import { auth, database } from '@/lib/firebase-browser';
-import { averageSubjectPercent, hasGrades, parseGradesForPeriod } from '@/lib/student-grades';
+import { averageSubjectPercent, classNumberForSchoolYear, hasGrades, parseGradesForPeriod } from '@/lib/student-grades';
 
 type Mode = 'login' | 'register';
 type Audience = 'student' | 'organization';
@@ -1261,11 +1261,12 @@ export function Access() {
                       onChange={e => { setPreferredYear(e.target.value); setPreferredQuarter(null); }}
                     >
                       {availableYears.length > 0 ? (
-                        availableYears.map(yr => (
-                          <option key={yr} value={yr}>
-                            {yr}–{Number(yr) + 1} учебный год {profile ? `(${profile.classNumber} класс)` : ''}
-                          </option>
-                        ))
+                        availableYears.map(year => {
+                          const classNumber = classNumberForSchoolYear(grades[year], year);
+                          return <option key={year} value={year}>
+                            {year}–{Number(year) + 1} учебный год{classNumber === null ? '' : ` (${classNumber} класс)`}
+                          </option>;
+                        })
                       ) : (
                         <option value="">Нет данных по годам</option>
                       )}

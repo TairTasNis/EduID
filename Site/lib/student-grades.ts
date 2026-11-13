@@ -184,12 +184,40 @@ function normalizeSubject(sub: any, source: SchoolSource): NormalizedSubject {
   };
 }
 
-export function parseGradesForPeriod(gradesMap: Record<string, unknown>, year: string, quarter: number, source: SchoolSource): NormalizedSubject[] {
-  if (!gradesMap || !gradesMap[year]) return [];
-  let data: any = gradesMap[year];
-  if (typeof data === 'string') {
-    try { data = JSON.parse(data); } catch { return []; }
+function readGradeArchive(raw: unknown): any {
+  if (typeof raw === 'string') {
+    try { return JSON.parse(raw); } catch { return null; }
   }
+  return raw;
+}
+
+function classNumberFromArchive(entry: any): number | null {
+  const label = entry?.class ?? entry?.className ?? entry?.gradeNumber;
+  if (typeof label !== 'string' && typeof label !== 'number') return null;
+  const match = /^(1[0-2]|[1-9])(?!\d)/.exec(String(label).trim());
+  return match ? Number(match[1]) : null;
+}
+
+export function classNumberForSchoolYear(raw: unknown, year: string): number | null {
+  const archive = readGradeArchive(raw);
+  if (!archive) return null;
+  if (Array.isArray(archive.history)) {
+    const record = archive.history.find((entry: any) =>
+      String(entry?.schoolYearName ?? entry?.academicYear ?? '').trim().match(/^20\d{2}(?!\d)/)?.[0] === year);
+    return classNumberFromArchive(record);
+  }
+
+  const storedYear = String(archive.schoolYearName ?? archive.academicYear ?? '').trim().match(/^20\d{2}(?!\d)/)?.[0];
+  if (storedYear && storedYear !== year) return null;
+  const direct = classNumberFromArchive(archive);
+  if (direct !== null) return direct;
+  const periods = Array.isArray(archive.periods) ? archive.periods : Array.isArray(archive) ? archive : [];
+  const numbers = new Set(periods.map(classNumberFromArchive).filter((number: number | null) => number !== null));
+  return numbers.size === 1 ? Number([...numbers][0]) : null;
+}
+
+export function parseGradesForPeriod(gradesMap: Record<string, unknown>, year: string, quarter: number, source: SchoolSource): NormalizedSubject[] {
+  const data = readGradeArchive(gradesMap?.[year]);
   if (!data) return [];
 
   let subjectsRaw: any[] = [];
