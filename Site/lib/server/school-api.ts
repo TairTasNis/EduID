@@ -3,7 +3,6 @@ import { request } from 'node:https';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { SchoolSource, StudentProfile } from '../contracts';
 import { configurationError, HttpError } from './http';
-import { scrapeSush } from './sush/scrape-sush.js';
 
 export type SchoolAccount = { source: SchoolSource; login: string; password: string };
 type SchoolProfileResponse = { fullName: string; className: string; years: string[] };
@@ -20,7 +19,6 @@ async function gradeApi(account: SchoolAccount, mode: 'profile' | 'history', yea
     return await new Promise<GradeApiResult>((resolve, reject) => {
       const req = request(endpoint, {
         method: 'POST', ca: GRADE_API_CA_PEM.replaceAll('\\n', '\n'),
-        rejectUnauthorized: false,
         signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
         headers: {
           Authorization: `Basic ${Buffer.from(`vercel:${GRADE_API_KEY}`).toString('base64')}`,
@@ -49,7 +47,7 @@ async function gradeApi(account: SchoolAccount, mode: 'profile' | 'history', yea
   }
 }
 
-async function loadBilimClass(account: SchoolAccount, mode: 'profile' | 'history', year?: string, signal?: AbortSignal) {
+async function loadSchoolData(account: SchoolAccount, mode: 'profile' | 'history', year?: string, signal?: AbortSignal) {
   let result = await gradeApi(account, mode, year, signal);
   if ([502, 503, 504].includes(result.status)) {
     await delay(1500, undefined, { signal });
@@ -62,47 +60,19 @@ async function loadBilimClass(account: SchoolAccount, mode: 'profile' | 'history
   if (result.status === 428 && result.payload.code === 'captcha_required') {
     throw new HttpError(428, 'Школьный сервис запросил CAPTCHA. Попробуйте позже.');
   }
-  if (result.status === 422) throw new HttpError(422, mode === 'profile'
-    ? 'BilimClass не подтвердил профиль ученика. Проверьте логин, пароль и выбранный сервис.'
-    : 'BilimClass не вернул данные за выбранный год.');
+  if (result.status === 422) {
+    const source = account.source === 'sush' ? 'СУШ' : 'BilimClass';
+    throw new HttpError(422, mode === 'profile'
+      ? `${source} не подтвердил профиль ученика. Проверьте данные для входа и выбранный сервис.`
+      : `${source} не вернул данные за выбранный год.`);
+  }
   if (result.status === 429) throw new HttpError(429, 'Школьный сервис занят другим запросом. Попробуйте через минуту.');
   if (result.status !== 200 || !result.payload.data) throw new HttpError(502, 'Школьный сервис не вернул нужные данные. Попробуйте позже.');
   return result.payload.data;
 }
 
 export async function loadProfile(account: SchoolAccount) {
-  if (account.source === 'sush') {
-    const result = await (scrapeSush as any)({
-      iin: account.login,
-      password: account.password,
-      mode: 'profile',
-      chooseScope: async () => ({}),
-    });
-    if (!result.success || !result.profile?.fullName) {
-      if (result.captchaRequired) {
-        throw new HttpError(428, 'СУШ НИШ Актобе запросил CAPTCHA на своём сайте. Сейчас EduID не может подтвердить этот аккаунт.');
-      }
-      throw new HttpError(422, 'СУШ не подтвердил профиль ученика. Проверьте ИИН и пароль.');
-    }
-    const fullName = String(result.profile.fullName || '').trim().replace(/\s+/g, ' ');
-    const classLabel = String(result.profile.className || '').trim();
-    const match = /^(1[0-2]|[1-9])\s*[-–]?\s*[«"„]?\s*(\p{L})(?=[\s»"“]|$)/u.exec(classLabel);
-    const years: string[] = Array.isArray(result.years) && result.years.length
-      ? ([...new Set(result.years.filter((y: any): y is string => typeof y === 'string' && /^20\d{2}$/.test(y)))] as string[]).sort((a, b) => Number(b) - Number(a))
-      : ['2026', '2025'];
-
-    const profile: StudentProfile = {
-      fullName,
-      classLabel,
-      classNumber: match ? Number(match[1]) : 8,
-      classLetter: match ? match[2].toUpperCase() : 'G',
-      source: 'sush',
-    };
-    return { profile, years };
-  }
-
-  // BilimClass via GradeApi on VPS
-  const data = await loadBilimClass(account, 'profile') as Partial<SchoolProfileResponse>;
+  const data = await loadSchoolData(account, 'profile') as Partial<SchoolProfileResponse>;
   const classLabel = typeof data.className === 'string' ? data.className.trim() : '';
   const match = /^(1[0-2]|[1-9])\s*[-–]?\s*[«"„]?\s*(\p{L})(?=[\s»"“]|$)/u.exec(classLabel);
   const fullName = typeof data.fullName === 'string' ? data.fullName.trim().replace(/\s+/g, ' ') : '';
@@ -117,20 +87,5 @@ export async function loadProfile(account: SchoolAccount) {
 }
 
 export async function loadSchoolYear(account: SchoolAccount, year: string, signal: AbortSignal) {
-  if (account.source === 'sush') {
-    const result = await (scrapeSush as any)({
-      iin: account.login,
-      password: account.password,
-      async chooseScope(years: any[]) {
-        const target = years.find((y: any) => String(y.Name || '').includes(year)) || years[0];
-        return { yearId: target.Id, view: 'year' };
-      },
-    });
-    if (!result.success || !result.grades) {
-      throw new HttpError(502, 'Школьный сервис СУШ не вернул данные за ' + year + ' год.');
-    }
-    return result.grades;
-  }
-
-  return loadBilimClass(account, 'history', year, signal);
+  return loadSchoolData(account, 'history', year, signal);
 }

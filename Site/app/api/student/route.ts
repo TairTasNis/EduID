@@ -1,9 +1,9 @@
-import { createHmac } from 'node:crypto';
 import { after } from 'next/server';
 import { studentInput } from '@/lib/contracts';
 import { firebaseAdmin } from '@/lib/server/firebase-admin';
-import { assertSameOrigin, configurationError, failure, HttpError, json } from '@/lib/server/http';
+import { assertSameOrigin, failure, HttpError, json } from '@/lib/server/http';
 import { loadProfile } from '@/lib/server/school-api';
+import { provisionStudentAuth, studentAuthRecord, studentIdentity, verifyStudentPassword } from '@/lib/server/student-auth';
 import { runImport, startImport } from '@/lib/server/student-import';
 
 export const runtime = 'nodejs';
@@ -23,9 +23,9 @@ export async function POST(request: Request) {
     if (!parsed.success) throw new HttpError(400, 'Проверьте логин или ИИН и пароль школьного сервиса.');
     const { action, source, login, password, consent } = parsed.data;
     if (action === 'register' && !consent) throw new HttpError(400, 'Подтвердите импорт оценок и данных школьного профиля.');
-    const key = process.env.EDUID_ID_HMAC_KEY;
-    if (!key || key.length < 32) throw configurationError('EDUID_ID_HMAC_KEY');
-    const uid = `student_${createHmac('sha256', key).update(`${source}:${login}`).digest('base64url')}`;
+    const account = { source, login, password };
+    const identity = studentIdentity(account);
+    const { uid } = identity;
     const { auth, db } = firebaseAdmin();
 
     const rate = await db.ref(`rateLimits/${uid}`).transaction((current: { count: number; since: number } | null) => {
@@ -36,27 +36,35 @@ export async function POST(request: Request) {
     });
     if (!rate.committed) throw new HttpError(429, 'Слишком много попыток. Попробуйте через 10 минут.');
 
-    const account = { source, login, password };
-    const { profile, years } = await loadProfile(account);
-    const requestedRegion = String(parsed.data.region || '').trim() || (source === 'sush' ? 'Актюбинская область' : 'г. Астана');
-    const enrichedProfile = { ...profile, region: requestedRegion };
-
-    const profileRef = db.ref(`students/${uid}/profile`);
-    const existing = (await profileRef.get()).exists();
-    if (!existing && action === 'login') throw new HttpError(404, 'Аккаунт EduID ещё не создан. Откройте регистрацию.');
-    if (existing && action === 'register') throw new HttpError(409, 'Аккаунт EduID уже создан. Откройте вход.');
-    const token = await auth.createCustomToken(uid, { accountType: 'student' });
-    if (existing) {
-      await profileRef.update(profile);
+    const student = db.ref(`students/${uid}`);
+    const profileRef = student.child('profile');
+    let profile = (await profileRef.get()).val();
+    let years: string[] | undefined = profile?.schoolYears;
+    if (action === 'login') {
+      if (!profile) throw new HttpError(404, 'Аккаунт EduID ещё не создан. Откройте регистрацию.');
+      if (!await verifyStudentPassword(identity)) {
+        const existing = await studentAuthRecord(auth, uid);
+        if (existing?.disabled) throw new HttpError(403, 'Аккаунт EduID отключён.');
+        if (existing?.email) throw new HttpError(401, 'Проверьте логин и пароль EduID.');
+        const school = await loadProfile(account);
+        await provisionStudentAuth(auth, identity);
+        years = school.years;
+        profile = { ...profile, ...school.profile, schoolYears: years };
+        await profileRef.update({ ...school.profile, schoolYears: years });
+      }
     } else {
-      const created = await profileRef.transaction(current => current ? undefined : {
-        ...enrichedProfile, createdAt: Date.now(), importConsentAt: Date.now(), consentVersion: 1,
-      });
+      if (profile) throw new HttpError(409, 'Аккаунт EduID уже создан. Откройте вход.');
+      const school = await loadProfile(account);
+      years = school.years;
+      const region = (parsed.data.region || '').trim() || (source === 'sush' ? 'Актюбинская область' : 'г. Астана');
+      const now = Date.now();
+      profile = { ...school.profile, region, schoolYears: years, createdAt: now, importConsentAt: now, consentVersion: 1 };
+      await provisionStudentAuth(auth, identity);
+      const created = await profileRef.transaction(current => current ? undefined : profile);
       if (!created.committed) throw new HttpError(409, 'Аккаунт EduID уже создан. Откройте вход.');
 
-      // Приветственное системное уведомление в БД
-      try {
-        const notifRef = db.ref(`students/${uid}/notifications`).push();
+      after(async () => {
+        const notifRef = student.child('notifications').push();
         await notifRef.set({
           id: notifRef.key,
           title: 'Добро пожаловать в EduID',
@@ -64,14 +72,19 @@ export async function POST(request: Request) {
           type: 'info',
           createdAt: Date.now(),
           read: false,
-        });
-      } catch {
-        // ignore
-      }
+        }).catch(() => {});
+      });
     }
-    const job = await startImport(db, uid, years);
-    if (job) after(() => runImport(db, uid, account, job, deadline));
-    return json({ token, profile: enrichedProfile });
+    const token = await auth.createCustomToken(uid, { accountType: 'student' });
+    after(async () => {
+      try {
+        const job = await startImport(db, uid, years);
+        if (job) await runImport(db, uid, account, job, deadline);
+      } catch {
+        console.error('EduID could not start the grade import');
+      }
+    });
+    return json({ token, profile });
   } catch (error) {
     return failure(error);
   }

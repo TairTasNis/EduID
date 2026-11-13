@@ -8,12 +8,14 @@ import { loadSchoolYear, type SchoolAccount } from './school-api';
 type ImportJob = ImportStatus & { id: string; years: string[]; savedYears?: Record<string, true> };
 const leaseMs = 6 * 60_000;
 
-export async function startImport(db: Database, uid: string, years: string[]) {
+export async function startImport(db: Database, uid: string, schoolYears?: string[]) {
   const status = db.ref(`students/${uid}/import`);
   const id = randomUUID();
   const result = await status.transaction((current: ImportJob | null) => {
     const now = Date.now();
     if (current?.status === 'running' && now - current.updatedAt < leaseMs) return;
+    const years = schoolYears ?? current?.years;
+    if (!years?.length) return;
     const savedYears = Object.fromEntries(years.filter(year => current?.savedYears?.[year]).map(year => [year, true as const]));
     const completed = Object.keys(savedYears).length;
     if (current?.status === 'complete' && completed === years.length) return;
@@ -77,11 +79,11 @@ export async function runImport(db: Database, uid: string, account: SchoolAccoun
       });
     }
     const finalCount = Object.keys(savedYears).length;
-    const isSuccess = !(yearFailure && finalCount === 0);
+    const isSuccess = yearFailure === null;
     await status.update({
       status: isSuccess ? 'complete' : 'failed',
       completed: finalCount,
-      total: finalCount,
+      total: isSuccess ? finalCount : job.total,
       message: isSuccess ? null : yearFailure,
       currentYear: null,
       updatedAt: Date.now(),

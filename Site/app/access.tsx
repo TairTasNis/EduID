@@ -2589,7 +2589,7 @@ export function Access() {
             {!organization && registering && <label className="consent"><input type="checkbox" name="consent" required />
               <span>Разрешаю EduID получить данные моего профиля и оценки из выбранного школьного сервиса.</span></label>}
             {error && <p className="message" role="alert">{error}</p>}
-            <button type="submit" className="primary">{busy ? organization ? 'Обрабатываем запрос…' : 'Проверяем школьный аккаунт…' : organizationForm ? 'Отправить заявку' : registering ? 'Создать профиль' : 'Войти'}</button>
+            <button type="submit" className="primary">{busy ? organization ? 'Обрабатываем запрос…' : registering ? 'Проверяем школьный аккаунт…' : 'Входим в EduID…' : organizationForm ? 'Отправить заявку' : registering ? 'Создать профиль' : 'Войти'}</button>
           </fieldset>
         </form>
         {!session && <div className="audience-switch"><button className="text-button" onClick={switchAudience} disabled={busy}>{organization ? 'Я ученик' : 'Я не ученик'}</button>
