@@ -47,6 +47,7 @@ function normalizeReportCardValue(value) {
 }
 
 export class SushClient {
+  /** @param {{ fetchImpl?: typeof fetch, baseUrl?: string, proxyUrl?: string }} [options] */
   constructor({ fetchImpl, baseUrl = DEFAULT_BASE_URL, proxyUrl = process.env.SUSH_PROXY_URL } = {}) {
     if (!fetchImpl) {
       if (proxyUrl && !process.env.SUSH_BASE_URL && baseUrl === "https://sms.akb.nis.edu.kz") {
@@ -215,7 +216,7 @@ export class SushClient {
       return { success: true };
     }
 
-    if (payload.captchaType && payload.captchaData) {
+    if ((payload.captchaType && payload.captchaData) || /капч|captcha/i.test(String(payload.message ?? ''))) {
       return {
         success: false,
         captchaRequired: true,

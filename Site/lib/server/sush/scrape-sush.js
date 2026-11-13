@@ -538,6 +538,10 @@ async function scrapeSchoolYear({
   };
 }
 
+/**
+ * @param {{ iin?: string, password?: string, mode?: string, targetView?: string, targetYearId?: string | number, chooseScope?: (years: { Name: string, Id: string | number }[], getQuarterViews: Function) => Promise<{ yearId?: string | number, view?: string }>, client?: SushClient, onProgress?: Function, captcha?: string, sessionToken?: string }} [options]
+ * @returns {Promise<{ success: boolean, debug: { trace: { step: string }[] }, captchaRequired?: boolean, profile?: { fullName: string, className: string }, years?: string[], grades?: unknown }>}
+ */
 export async function scrapeSush({
   iin,
   password,
@@ -583,7 +587,7 @@ export async function scrapeSush({
 
     if (loginResult.captchaRequired) {
       pushTrace("captcha_required", { captchaType: loginResult.captchaType });
-      const newSessionToken = encodeSessionToken(client.getCookies());
+      const newSessionToken = loginResult.captchaData ? encodeSessionToken(client.getCookies()) : undefined;
       return result(false, {
         captchaRequired: true,
         captchaType: loginResult.captchaType,

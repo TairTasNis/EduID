@@ -3,6 +3,8 @@ import { request } from 'node:https';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { SchoolSource, StudentProfile } from '../contracts';
 import { configurationError, HttpError } from './http';
+import { scrapeSush } from './sush/scrape-sush.js';
+import { SushClient } from './sush/sush-client.js';
 
 export type SchoolAccount = { source: SchoolSource; login: string; password: string };
 type SchoolProfileResponse = { fullName: string; className: string; years: string[] };
@@ -48,7 +50,39 @@ async function gradeApi(account: SchoolAccount, mode: 'profile' | 'history', yea
 }
 
 async function loadSchoolData(account: SchoolAccount, mode: 'profile' | 'history', year?: string, signal?: AbortSignal) {
-  const source = account.source === 'sush' ? 'СУШ' : 'BilimClass';
+  if (account.source === 'sush') {
+    const client = new SushClient({
+      baseUrl: 'https://sush.tasmukhambetov-t08.workers.dev',
+      proxyUrl: '',
+      fetchImpl: (url, options = {}) => fetch(url, {
+        ...options,
+        cache: 'no-store',
+        signal: signal && options.signal ? AbortSignal.any([signal, options.signal]) : signal ?? options.signal,
+      }),
+    });
+    const result = await scrapeSush({
+      client,
+      iin: account.login,
+      password: account.password,
+      mode: mode === 'profile' ? 'profile' : 'full',
+      async chooseScope(years: { Name: string; Id: string | number }[]) {
+        const target = years.find(item => String(item.Name).match(/20\d{2}/)?.[0] === year);
+        if (!target) throw new HttpError(422, 'СУШ не предоставил данные за выбранный учебный год.');
+        return { yearId: target.Id, view: 'year' };
+      },
+    });
+    if (result.captchaRequired) throw new HttpError(428, 'СУШ запросил CAPTCHA. Проверьте вход на школьном сайте.');
+    if (result.success) {
+      if (mode === 'profile') return { ...result.profile, years: result.years };
+      if (result.grades) return result.grades;
+    }
+    if (result.debug.trace.some((event: { step: string }) => event.step === 'login_failed')) {
+      throw new HttpError(422, 'СУШ отклонил вход. Проверьте ИИН и пароль.');
+    }
+    throw new HttpError(502, 'СУШ не вернул данные. Попробуйте позже.');
+  }
+
+  const source = 'BilimClass';
   let result = await gradeApi(account, mode, year, signal);
   if ([502, 503, 504].includes(result.status)) {
     await delay(1500, undefined, { signal });
@@ -67,9 +101,6 @@ async function loadSchoolData(account: SchoolAccount, mode: 'profile' | 'history
       : `${source} не вернул данные за выбранный год.`);
   }
   if (result.status === 429) throw new HttpError(429, 'Школьный сервис занят другим запросом. Попробуйте через минуту.');
-  if (result.payload.code === 'sush_relay_offline') {
-    throw new HttpError(503, 'EduID временно не может подключиться к СУШ. Попробуйте позже.');
-  }
   if (result.status !== 200 || !result.payload.data) throw new HttpError(502, `${source} не вернул данные. Попробуйте позже.`);
   return result.payload.data;
 }
