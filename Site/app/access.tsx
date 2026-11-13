@@ -243,6 +243,7 @@ export function Access() {
   const [verified, setVerified] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [sushCaptchaRequired, setSushCaptchaRequired] = useState(false);
   const [notice, setNotice] = useState('');
 
   // Student Dashboard state
@@ -771,12 +772,14 @@ export function Access() {
     const fields = new FormData(form);
     const password = String(fields.get('password') ?? '');
     setError(''); setNotice(''); setBusy(true);
+    setSushCaptchaRequired(false);
     try {
       if (audience === 'student') {
         const response = await fetch('/api/student', { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: mode, source, login: fields.get('login'), password, region: fields.get('region') || undefined, consent: fields.has('consent') }) });
         const result = await response.json().catch(() => null);
         if (!response.ok) {
+          if (result?.code === 'sush_captcha_required') setSushCaptchaRequired(true);
           if (result?.code === 'account_exists') setMode('login');
           if (result?.code === 'registration_required') setMode('register');
           const fallback = response.status === 504
@@ -2355,7 +2358,11 @@ export function Access() {
             </>}
             {!organization && registering && <label className="consent"><input type="checkbox" name="consent" required />
               <span>Разрешаю EduID получить данные моего профиля и оценки из выбранного школьного сервиса.</span></label>}
-            {error && <p className="message" role="alert">{error}</p>}
+            {error && <p className="message" role="alert">
+              {error}{sushCaptchaRequired && !organization && source === 'sush' && (
+                <> <a href="https://sms.akb.nis.edu.kz/" target="_blank" rel="noopener noreferrer">Открыть СУШ НИШ Актобе</a></>
+              )}
+            </p>}
             <button type="submit" className="primary">{busy ? organization ? 'Обрабатываем запрос…' : registering ? 'Проверяем школьный аккаунт…' : 'Входим в EduID…' : organizationForm ? 'Отправить заявку' : registering ? 'Создать профиль' : 'Войти'}</button>
           </fieldset>
         </form>

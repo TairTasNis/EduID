@@ -71,7 +71,9 @@ async function loadSchoolData(account: SchoolAccount, mode: 'profile' | 'history
         return { yearId: target.Id, view: 'year' };
       },
     });
-    if (result.captchaRequired) throw new HttpError(428, 'СУШ запросил CAPTCHA. Проверьте вход на школьном сайте.');
+    if (result.captchaRequired) {
+      throw new HttpError(428, 'СУШ требует CAPTCHA для подключения EduID. Оценки доступны на школьном сайте.', 'sush_captcha_required');
+    }
     if (result.success) {
       if (mode === 'profile') return { ...result.profile, years: result.years };
       if (result.grades) return result.grades;
