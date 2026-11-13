@@ -3,6 +3,7 @@ import { studentInput } from '@/lib/contracts';
 import { firebaseAdmin } from '@/lib/server/firebase-admin';
 import { assertSameOrigin, failure, HttpError, json } from '@/lib/server/http';
 import { loadProfile } from '@/lib/server/school-api';
+import { leaderboardRevision, nextLeaderboardRevision } from '@/lib/server/leaderboard-revision';
 import { provisionStudentAuth, studentAuthRecord, studentIdentity, verifyStudentPassword } from '@/lib/server/student-auth';
 import { runImport, startImport } from '@/lib/server/student-import';
 
@@ -50,7 +51,11 @@ export async function POST(request: Request) {
         await provisionStudentAuth(auth, identity);
         years = school.years;
         profile = { ...profile, ...school.profile, schoolYears: years };
-        await profileRef.update({ ...school.profile, schoolYears: years });
+        await db.ref().update({
+          ...Object.fromEntries(Object.entries({ ...school.profile, schoolYears: years })
+            .map(([field, value]) => [`students/${uid}/profile/${field}`, value])),
+          [leaderboardRevision]: nextLeaderboardRevision(),
+        });
       }
     } else {
       if (profile) throw new HttpError(409, 'Аккаунт EduID уже создан. Откройте вход.');
@@ -64,6 +69,7 @@ export async function POST(request: Request) {
       if (!created.committed) throw new HttpError(409, 'Аккаунт EduID уже создан. Откройте вход.');
 
       after(async () => {
+        await db.ref(leaderboardRevision).set(nextLeaderboardRevision()).catch(() => {});
         const notifRef = student.child('notifications').push();
         await notifRef.set({
           id: notifRef.key,

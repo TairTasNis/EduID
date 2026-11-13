@@ -1,5 +1,6 @@
 import { firebaseAdmin } from '@/lib/server/firebase-admin';
 import { failure, HttpError, json } from '@/lib/server/http';
+import { leaderboardRevision, nextLeaderboardRevision } from '@/lib/server/leaderboard-revision';
 
 export const runtime = 'nodejs';
 
@@ -87,7 +88,10 @@ export async function POST(request: Request) {
           totalTalentScore += a.score;
         }
       }
-      await db.ref(`students/${studentUid}/profile/talentScore`).set(totalTalentScore);
+      await db.ref().update({
+        [`students/${studentUid}/profile/talentScore`]: totalTalentScore,
+        [leaderboardRevision]: nextLeaderboardRevision(),
+      });
 
       // Отправляем уведомление ученику
       const notifRef = db.ref(`students/${studentUid}/notifications`).push();
@@ -102,9 +106,10 @@ export async function POST(request: Request) {
 
       return json({ ok: true, status: 'verified', score: awardedScore });
     } else if (action === 'reject') {
-      await achRef.update({
-        status: 'rejected',
-        reviewedAt: Date.now(),
+      await db.ref().update({
+        [`students/${studentUid}/achievements/${achievementId}/status`]: 'rejected',
+        [`students/${studentUid}/achievements/${achievementId}/reviewedAt`]: Date.now(),
+        [leaderboardRevision]: nextLeaderboardRevision(),
       });
 
       // Отправляем уведомление ученику

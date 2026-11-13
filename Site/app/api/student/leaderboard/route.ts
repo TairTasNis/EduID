@@ -1,5 +1,6 @@
 import { firebaseAdmin } from '@/lib/server/firebase-admin';
-import { failure, json } from '@/lib/server/http';
+import { failure, HttpError, json } from '@/lib/server/http';
+import { averageSubjectPercent, parseGradesForPeriod } from '@/lib/student-grades';
 
 export const runtime = 'nodejs';
 
@@ -21,7 +22,7 @@ function calculateScoreFromAchievements(achievements: any): { score: number; cou
   for (const ach of Object.values(achievements) as any[]) {
     if (!ach || typeof ach !== 'object') continue;
     count++;
-    if (ach.status === 'verified' || typeof ach.score === 'number') {
+    if (ach.status === 'verified' || (!ach.status && typeof ach.score === 'number')) {
       const base = typeof ach.score === 'number' ? ach.score : (
         ach.stage === 'Всемирный' ? 300 :
         ach.stage === 'Республиканский' ? 200 :
@@ -35,59 +36,14 @@ function calculateScoreFromAchievements(achievements: any): { score: number; cou
   return { score, count };
 }
 
-function calculateOverallAverage(grades: any): number | null {
-  if (!grades || typeof grades !== 'object') return null;
-  const percentages: number[] = [];
-  for (const year of Object.keys(grades)) {
-    let yearData = grades[year];
-    if (typeof yearData === 'string') {
-      try { yearData = JSON.parse(yearData); } catch { continue; }
-    }
-    if (!yearData) continue;
-
-    for (const q of ['quarter1', 'quarter2', 'quarter3', 'quarter4']) {
-      const rows = yearData.grades?.[q] || yearData[q];
-      if (Array.isArray(rows)) {
-        for (const s of rows) {
-          if (typeof s?.totalPercent === 'number' && !isNaN(s.totalPercent) && s.totalPercent > 0) {
-            percentages.push(Math.round(s.totalPercent));
-          }
-        }
-      }
-    }
-
-    if (Array.isArray(yearData.periods)) {
-      for (const p of yearData.periods) {
-        if (Array.isArray(p.subjects)) {
-          for (const s of p.subjects) {
-            if (typeof s?.totalPercent === 'number' && s.totalPercent > 0) {
-              percentages.push(Math.round(s.totalPercent));
-            }
-          }
-        }
-      }
-    }
-  }
-  if (!percentages.length) return null;
-  return Math.round(percentages.reduce((a, b) => a + b, 0) / percentages.length);
-}
-
 export async function GET(request: Request) {
   try {
-    let currentUid: string | null = null;
     const authHeader = request.headers.get('authorization');
-    if (authHeader?.startsWith('Bearer ')) {
-      try {
-        const token = authHeader.slice(7);
-        const { auth } = firebaseAdmin();
-        const decoded = await auth.verifyIdToken(token);
-        currentUid = decoded.uid;
-      } catch {
-        // Continue
-      }
-    }
-
-    const { db } = firebaseAdmin();
+    if (!authHeader?.startsWith('Bearer ')) throw new HttpError(401, 'Войдите в EduID, чтобы открыть рейтинг.');
+    const { auth, db } = firebaseAdmin();
+    const { uid: currentUid } = await auth.verifyIdToken(authHeader.slice(7)).catch(() => {
+      throw new HttpError(401, 'Войдите в EduID, чтобы открыть рейтинг.');
+    });
     const snap = await db.ref('students').once('value');
     const studentsData = snap.val() || {};
 
@@ -100,8 +56,10 @@ export async function GET(request: Request) {
       const name = profile.fullName;
       const classLabel = profile.classLabel || (profile.classNumber ? `${profile.classNumber} класс` : 'Ученик');
       const { score, count } = calculateScoreFromAchievements(student?.achievements);
-      const talentScore = typeof profile?.talentScore === 'number' ? profile.talentScore : score;
-      const averagePercent = calculateOverallAverage(student?.grades);
+      const grades = student.grades ?? {};
+      const source = profile.source === 'sush' ? 'sush' : 'bilimclass';
+      const averagePercent = averageSubjectPercent(Object.keys(grades).map(year =>
+        [1, 2, 3, 4].map(quarter => parseGradesForPeriod(grades, year, quarter, source))));
 
       const region = profile.region || (profile.source === 'sush' ? 'Актюбинская область' : 'г. Астана');
 
@@ -110,7 +68,7 @@ export async function GET(request: Request) {
         name,
         classLabel,
         region,
-        talentScore,
+        talentScore: score,
         achievementsCount: count,
         averagePercent,
         isCurrentUser: uid === currentUid,
@@ -119,7 +77,7 @@ export async function GET(request: Request) {
 
     leaderboard.sort((a, b) => {
       if (b.talentScore !== a.talentScore) return b.talentScore - a.talentScore;
-      return (b.averagePercent ?? 0) - (a.averagePercent ?? 0);
+      return (b.averagePercent ?? 0) - (a.averagePercent ?? 0) || a.uid.localeCompare(b.uid);
     });
 
     const currentUserEntry = currentUid ? leaderboard.find(e => e.uid === currentUid) : null;

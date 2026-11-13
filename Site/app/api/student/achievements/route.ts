@@ -1,5 +1,6 @@
 import { firebaseAdmin } from '@/lib/server/firebase-admin';
 import { failure, HttpError, json } from '@/lib/server/http';
+import { leaderboardRevision, nextLeaderboardRevision } from '@/lib/server/leaderboard-revision';
 
 export const runtime = 'nodejs';
 
@@ -30,7 +31,10 @@ export async function POST(request: Request) {
       status: 'unverified',
       createdAt: Date.now(),
     };
-    await newRef.set(achievement);
+    await db.ref().update({
+      [`students/${uid}/achievements/${newRef.key}`]: achievement,
+      [leaderboardRevision]: nextLeaderboardRevision(),
+    });
 
     // Добавляем уведомление в БД
     try {
@@ -73,7 +77,10 @@ export async function DELETE(request: Request) {
       if (photoSize > 0) {
         await db.ref('system/storageUsage').transaction((curr: number | null) => Math.max(0, (Number(curr) || 0) - photoSize));
       }
-      await achRef.remove();
+      await db.ref().update({
+        [`students/${uid}/achievements/${id}`]: null,
+        [leaderboardRevision]: nextLeaderboardRevision(),
+      });
     }
 
     return json({ ok: true });

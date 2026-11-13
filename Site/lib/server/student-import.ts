@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Database } from 'firebase-admin/database';
 import type { ImportStatus } from '../contracts';
 import { HttpError } from './http';
+import { leaderboardRevision, nextLeaderboardRevision } from './leaderboard-revision';
 import { loadSchoolYear, type SchoolAccount } from './school-api';
 
 type ImportJob = ImportStatus & { id: string; years: string[]; savedYears?: Record<string, true> };
@@ -70,12 +71,13 @@ export async function runImport(db: Database, uid: string, account: SchoolAccoun
       }
 
       savedYears[year] = true;
-      await student.update({
-        [`grades/${year}`]: gradeJson,
-        [`import/savedYears/${year}`]: true,
-        'import/completed': Object.keys(savedYears).length,
-        'import/total': Math.max(Object.keys(savedYears).length, job.total),
-        'import/updatedAt': Date.now(),
+      await db.ref().update({
+        [`students/${uid}/grades/${year}`]: gradeJson,
+        [`students/${uid}/import/savedYears/${year}`]: true,
+        [`students/${uid}/import/completed`]: Object.keys(savedYears).length,
+        [`students/${uid}/import/total`]: Math.max(Object.keys(savedYears).length, job.total),
+        [`students/${uid}/import/updatedAt`]: Date.now(),
+        [leaderboardRevision]: nextLeaderboardRevision(),
       });
     }
     const finalCount = Object.keys(savedYears).length;

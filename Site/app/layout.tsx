@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import '@fontsource-variable/golos-text';
 import './globals.css';
+import './dashboard.css';
 
 export const metadata: Metadata = {
   title: 'EduID — учебный профиль',

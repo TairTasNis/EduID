@@ -3,10 +3,11 @@
 import { useEffect, useState, useMemo, useCallback, type FormEvent, type ReactNode, type ChangeEvent } from 'react';
 import { createUserWithEmailAndPassword, onAuthStateChanged, reload, sendEmailVerification,
   signInWithCustomToken, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth';
-import { onValue, push, ref, remove, update } from 'firebase/database';
+import { onValue, ref, update } from 'firebase/database';
 import { corporateEmail, documentTypes, KAZAKHSTAN_REGIONS, maxDocumentBytes, organizationTypes, providers,
   type ImportStatus, type OrganizationStatus, type SchoolSource, type StudentProfile } from '@/lib/contracts';
 import { auth, database } from '@/lib/firebase-browser';
+import { averageSubjectPercent, hasGrades, parseGradesForPeriod } from '@/lib/student-grades';
 
 type Mode = 'login' | 'register';
 type Audience = 'student' | 'organization';
@@ -22,6 +23,7 @@ type Achievement = {
   photoUrl: string;
   photoSize?: number;
   status?: 'unverified' | 'verified';
+  score?: number;
   createdAt?: number;
 };
 
@@ -44,16 +46,6 @@ interface LeaderboardItem {
   averagePercent: number | null;
   isCurrentUser?: boolean;
 }
-
-type NormalizedSubject = {
-  name: string;
-  formativeMarks: string[];
-  formativePercent: number | null;
-  sorPercent: number | null;
-  sochPercent: number | null;
-  finalPercent: number | null;
-  quarterGrade?: string | number | null;
-};
 
 function Logo() {
   return <span className="wordmark"><span className="logo-mark" aria-hidden="true"><i /><i /><i /></span>EduID</span>;
@@ -131,6 +123,12 @@ function IdentityArt({ organization }: { organization: boolean }) {
 
 function Progress({ status, retry }: { status: ImportStatus; retry: () => void }) {
   const [hidden, setHidden] = useState(false);
+  useEffect(() => {
+    setHidden(false);
+    if (status.status !== 'complete') return;
+    const timer = window.setTimeout(() => setHidden(true), 7000);
+    return () => window.clearTimeout(timer);
+  }, [status.status, status.updatedAt]);
   if (hidden && status.status === 'complete') return null;
   const percent = status.status === 'complete' ? 100 : Math.round(100 * status.completed / Math.max(status.total, 1));
   const title = { running: 'Импорт оценок', complete: 'Оценки импортированы', failed: 'Импорт приостановлен' }[status.status];
@@ -164,7 +162,7 @@ function getFormativeClass(mark: unknown): string {
   return 'score-red';
 }
 
-function CircularGauge({ percent }: { percent: number | null }) {
+function CircularGauge({ percent, compact = false }: { percent: number | null; compact?: boolean }) {
   const radius = 34;
   const circumference = 2 * Math.PI * radius;
   const value = percent !== null ? Math.min(100, Math.max(0, percent)) : 0;
@@ -173,13 +171,13 @@ function CircularGauge({ percent }: { percent: number | null }) {
   let color = '#94a3b8';
   if (percent !== null) {
     if (percent >= 80) color = '#16a34a'; // 80 - 100%: Green
-    else if (percent >= 65) color = '#ca8a04'; // 65 - 79%: Yellow
+    else if (percent >= 65) color = '#9b6900'; // 65 - 79%: Yellow
     else color = '#dc2626'; // < 65%: Red
   }
 
   return (
-    <div className="gauge-wrapper" aria-label={`Средний процент: ${percent !== null ? percent + '%' : 'нет данных'}`}>
-      <svg className="gauge-svg" viewBox="0 0 86 86">
+    <div className={`gauge-wrapper${compact ? ' gauge-compact' : ''}`} role="img" aria-label={`Средний процент: ${percent !== null ? percent + '%' : 'нет данных'}`}>
+      <svg className="gauge-svg" viewBox="0 0 86 86" aria-hidden="true">
         <circle className="gauge-bg" cx="43" cy="43" r={radius} />
         <circle
           className="gauge-fill"
@@ -191,231 +189,26 @@ function CircularGauge({ percent }: { percent: number | null }) {
           strokeDashoffset={percent !== null ? offset : circumference}
         />
       </svg>
-      <div className="gauge-text" style={{ color: percent !== null ? color : undefined }}>
+      <div className="gauge-text" aria-hidden="true" style={{ color: percent !== null ? color : undefined }}>
         {percent !== null ? `${percent}%` : '—'}
       </div>
     </div>
   );
 }
 
-function parseRatioOrPercent(val: unknown): number | null {
-  if (typeof val === 'number') return val >= 0 ? val : null;
-  if (!val || typeof val !== 'string') return null;
-  const str = val.trim();
-  if (str === '-' || str === '✖' || str.startsWith('-')) return null;
-  const ratioMatch = str.match(/(\d+(?:[.,]\d+)?)\s*\/\s*(\d+(?:[.,]\d+)?)/);
-  if (ratioMatch) {
-    const s = parseFloat(ratioMatch[1].replace(',', '.'));
-    const m = parseFloat(ratioMatch[2].replace(',', '.'));
-    return m > 0 && s >= 0 ? (s / m) * 100 : null;
-  }
-  const pctMatch = str.match(/(\d+(?:[.,]\d+)?)\s*%/);
-  if (pctMatch) {
-    const p = parseFloat(pctMatch[1].replace(',', '.'));
-    return p >= 0 ? p : null;
-  }
-  const num = parseFloat(str.replace(',', '.'));
-  return !isNaN(num) && num >= 0 ? num : null;
+function AssessmentCell({ percent, colorPercent, marks }: { percent: number | null; colorPercent: number | null; marks: string[] }) {
+  if (percent === null && !marks.length) return <span className="grade-missing">—</span>;
+  return <div className="assessment-cell">
+    {percent !== null && <span className={`percent-pill ${getScoreClass(colorPercent)}`}>{percent}%</span>}
+    {marks.length > 0 && <div className="marks-chips-wrap">
+      {marks.map((mark, index) => <span className={`mark-chip ${getScoreClass(assessmentRatio(mark))}`} key={index}>{mark}</span>)}
+    </div>}
+  </div>;
 }
 
-function normalizeSubject(sub: any, source: SchoolSource): NormalizedSubject {
-  const name = sub?.subject || sub?.name || 'Предмет';
-
-  // ФО
-  let formativeMarks: string[] = [];
-  if (Array.isArray(sub?.marks)) {
-    formativeMarks = sub.marks
-      .map((m: any) => {
-        if (m === null || m === undefined) return '';
-        if (typeof m === 'object') return String(m.score ?? m.value ?? m.mark ?? '');
-        return String(m);
-      })
-      .filter((s: string) => Boolean(s) && s !== '-');
-  }
-  const formativePercent = typeof sub?.formativePercent === 'number' ? sub.formativePercent : null;
-
-  // СОР
-  let sorPercent: number | null = null;
-  if (typeof sub?.sorPercent === 'number' && sub.sorPercent >= 0) {
-    sorPercent = sub.sorPercent;
-  } else if (Array.isArray(sub?.evaluations)) {
-    const sorEval = sub.evaluations.find((e: any) => e.shortName === 'СОР' || (typeof e.name === 'string' && e.name.includes('раздел')));
-    if (sorEval) {
-      const score = parseFloat(String(sorEval.score || '').replace(',', '.'));
-      const maxScore = parseFloat(String(sorEval.maxScore || '').replace(',', '.'));
-      if (maxScore > 0 && !isNaN(score) && score >= 0) {
-        sorPercent = Math.round((score / maxScore) * 100);
-      } else if (sorEval.percent) {
-        sorPercent = parseRatioOrPercent(sorEval.percent);
-      }
-    }
-  } else if (Array.isArray(sub?.sors)) {
-    const valid = sub.sors.filter((s: any) => s !== '-' && s !== '✖' && s != null && !String(s).startsWith('-'));
-    if (valid.length) {
-      let totalSc = 0, totalMax = 0;
-      for (const s of valid) {
-        const parts = String(s).split('/');
-        if (parts.length === 2) {
-          const sc = parseFloat(parts[0]);
-          const mx = parseFloat(parts[1]);
-          if (sc >= 0 && mx > 0) {
-            totalSc += sc;
-            totalMax += mx;
-          }
-        }
-      }
-      if (totalMax > 0) sorPercent = Math.round((totalSc / totalMax) * 100);
-    }
-  }
-
-  // СОЧ
-  let sochPercent: number | null = null;
-  if (typeof sub?.sochPercent === 'number' && sub.sochPercent >= 0) {
-    sochPercent = sub.sochPercent;
-  } else if (Array.isArray(sub?.evaluations)) {
-    const sochEval = sub.evaluations.find((e: any) => e.shortName === 'СОЧ' || (typeof e.name === 'string' && e.name.includes('четверть')));
-    if (sochEval) {
-      const score = parseFloat(String(sochEval.score || '').replace(',', '.'));
-      const maxScore = parseFloat(String(sochEval.maxScore || '').replace(',', '.'));
-      if (maxScore > 0 && !isNaN(score) && score >= 0) {
-        sochPercent = Math.round((score / maxScore) * 100);
-      } else if (sochEval.percent) {
-        sochPercent = parseRatioOrPercent(sochEval.percent);
-      }
-    }
-  } else if (Array.isArray(sub?.sochs)) {
-    const valid = sub.sochs.filter((s: any) => s !== '-' && s !== '✖' && s != null && !String(s).startsWith('-'));
-    if (valid.length) {
-      let totalSc = 0, totalMax = 0;
-      for (const s of valid) {
-        const parts = String(s).split('/');
-        if (parts.length === 2) {
-          const sc = parseFloat(parts[0]);
-          const mx = parseFloat(parts[1]);
-          if (sc >= 0 && mx > 0) {
-            totalSc += sc;
-            totalMax += mx;
-          }
-        }
-      }
-      if (totalMax > 0) sochPercent = Math.round((totalSc / totalMax) * 100);
-    }
-  }
-
-  // Расчет итогового процента
-  // Формула BilimClass: 25% ФО + 25% СОР + 50% СОЧ = Итоговый процент
-  // Формула СУШ: 50% СОР + 50% СОЧ = Итоговый процент
-  let finalPercent: number | null = null;
-
-  if (source === 'bilimclass') {
-    if (typeof sub?.totalPercent === 'number' && sub.totalPercent > 0) {
-      finalPercent = Math.round(sub.totalPercent);
-    } else {
-      let sum = 0;
-      let totalWeight = 0;
-      if (formativePercent !== null && formativePercent > 0) {
-        sum += formativePercent * 0.25;
-        totalWeight += 0.25;
-      }
-      if (sorPercent !== null && sorPercent > 0) {
-        sum += sorPercent * 0.25;
-        totalWeight += 0.25;
-      }
-      if (sochPercent !== null && sochPercent > 0) {
-        sum += sochPercent * 0.50;
-        totalWeight += 0.50;
-      }
-      if (totalWeight > 0) {
-        finalPercent = Math.round(sum / totalWeight);
-      }
-    }
-  } else {
-    // SUSH: 50% СОР + 50% СОЧ
-    if (sorPercent !== null && sochPercent !== null) {
-      finalPercent = Math.round(sorPercent * 0.50 + sochPercent * 0.50);
-    } else if (sorPercent !== null && sochPercent === null) {
-      finalPercent = Math.round(sorPercent);
-    } else if (typeof sub?.totalPercent === 'number' && sub.totalPercent > 0) {
-      finalPercent = Math.round(sub.totalPercent);
-    } else if (sub?.score && !isNaN(parseFloat(sub.score)) && parseFloat(sub.score) > 0) {
-      finalPercent = Math.round(parseFloat(sub.score));
-    }
-  }
-
-  const rawGrade = sub?.quarterGrade ?? sub?.mark ?? null;
-  const quarterGrade = (rawGrade === '0' || rawGrade === 0 || rawGrade === '-' || rawGrade === 'none') ? null : rawGrade;
-
-  return {
-    name,
-    formativeMarks,
-    formativePercent,
-    sorPercent,
-    sochPercent,
-    finalPercent,
-    quarterGrade,
-  };
-}
-
-function parseGradesForPeriod(gradesMap: Record<string, unknown>, year: string, quarter: number, source: SchoolSource): NormalizedSubject[] {
-  if (!gradesMap || !gradesMap[year]) return [];
-  let data: any = gradesMap[year];
-  if (typeof data === 'string') {
-    try { data = JSON.parse(data); } catch { return []; }
-  }
-  if (!data) return [];
-
-  let subjectsRaw: any[] = [];
-  const qKey = `quarter${quarter}`;
-
-  // SUSH structure check
-  if (data.grades && Array.isArray(data.grades[qKey])) {
-    subjectsRaw = data.grades[qKey];
-  } else if (Array.isArray(data[qKey])) {
-    subjectsRaw = data[qKey];
-  } else if (Array.isArray(data.periods)) {
-    // BilimClass structure check
-    const period = data.periods.find((p: any) =>
-      Array.isArray(p?.subjects) && p.subjects.length > 0 && (
-        Number(p.quarter) === quarter ||
-        (typeof p.quarterLabel === 'string' && p.quarterLabel.includes(String(quarter))) ||
-        (typeof p.name === 'string' && p.name.includes(String(quarter)))
-      )
-    );
-    if (period && Array.isArray(period.subjects)) {
-      subjectsRaw = period.subjects;
-    }
-  } else if (Array.isArray(data)) {
-    const period = data.find((p: any) =>
-      Number(p.quarter) === quarter ||
-      (typeof p.Name === 'string' && p.Name.includes(String(quarter))) ||
-      (typeof p.name === 'string' && p.name.includes(String(quarter)))
-    );
-    if (period && Array.isArray(period.subjects)) {
-      subjectsRaw = period.subjects;
-    } else {
-      subjectsRaw = data;
-    }
-  } else if (data.subjects && Array.isArray(data.subjects)) {
-    subjectsRaw = data.subjects;
-  }
-
-  const subjects = subjectsRaw.map(s => normalizeSubject(s, source));
-  const report = data.grades?.report ?? data.report;
-  if (source !== 'sush' || !Array.isArray(report)) return subjects;
-
-  for (const row of report) {
-    const mark = String(row?.[`q${quarter}`] ?? '').trim();
-    if (!/^[1-5]$/.test(mark) || typeof row?.subject !== 'string' || !row.subject.trim()) continue;
-    const subject = subjects.find(item => item.name.trim().toLowerCase() === row.subject.trim().toLowerCase());
-    if (subject) subject.quarterGrade ??= mark;
-    else subjects.push(normalizeSubject({ subject: row.subject, mark }, source));
-  }
-  return subjects;
-}
-
-function hasGrades(subjects: NormalizedSubject[]) {
-  return subjects.some(subject => subject.quarterGrade != null || subject.finalPercent !== null ||
-    subject.sorPercent !== null || subject.sochPercent !== null || subject.formativeMarks.length > 0);
+function assessmentRatio(mark: string) {
+  const [value, max] = mark.split('/').map(Number);
+  return Number.isFinite(value) && max > 0 ? 100 * value / max : null;
 }
 
 async function readResponse(response: Response) {
@@ -462,7 +255,9 @@ export function Access() {
   const [preferredQuarter, setPreferredQuarter] = useState<number | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardItem[]>([]);
   const [userRank, setUserRank] = useState<number | null>(null);
-  const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
+  const [loadingLeaderboard, setLoadingLeaderboard] = useState(true);
+  const [leaderboardError, setLeaderboardError] = useState(false);
+  const [leaderboardRefresh, setLeaderboardRefresh] = useState(0);
 
   // Organization & Admin Dashboard state
   const isAdmin = session?.user?.email?.toLowerCase() === 'tasmuhambetovtair@gmail.com';
@@ -492,10 +287,17 @@ export function Access() {
   // Lightbox viewer for certificates
   const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
 
+  const currentTab = session?.kind === 'student' ? activeTab : isAdmin ? adminTab : orgTab;
+  useEffect(() => { window.scrollTo(0, 0); }, [currentTab]);
+
   useEffect(() => onAuthStateChanged(auth, user => {
     setApplication(null);
     setLoadedApplication(false);
-    if (!user) { setSession(null); setProfile(null); setProgress(null); setGrades({}); setAchievements({}); setNotifications({}); return; }
+    if (!user) {
+      setSession(null); setProfile(null); setProgress(null); setGrades({}); setAchievements({}); setNotifications({});
+      setLeaderboard([]); setUserRank(null); setLeaderboardError(false); setLoadingLeaderboard(true);
+      return;
+    }
     void user.getIdTokenResult().then(result => {
       if (auth.currentUser?.uid !== user.uid) return;
       setVerified(user.emailVerified);
@@ -567,26 +369,7 @@ export function Access() {
     return subjectsWithGrades.reduce((best, curr) => ((curr.finalPercent ?? 0) > (best.finalPercent ?? 0) ? curr : best));
   }, [subjectsWithGrades]);
 
-  // Overall average percentage across ALL available years and ALL quarters
-  const allAvailableFinalPercentages = useMemo(() => {
-    const all: number[] = [];
-    for (const yearSubjects of subjectsByYear.values()) {
-      for (const subs of yearSubjects) {
-        for (const s of subs) {
-          if (typeof s.finalPercent === 'number' && !isNaN(s.finalPercent) && s.finalPercent > 0) {
-            all.push(s.finalPercent);
-          }
-        }
-      }
-    }
-    return all;
-  }, [subjectsByYear]);
-
-  const overallAveragePercent = useMemo(() => {
-    if (!allAvailableFinalPercentages.length) return null;
-    const total = allAvailableFinalPercentages.reduce((acc, p) => acc + p, 0);
-    return Math.round(total / allAvailableFinalPercentages.length);
-  }, [allAvailableFinalPercentages]);
+  const overallAveragePercent = useMemo(() => averageSubjectPercent(subjectsByYear.values()), [subjectsByYear]);
 
   // Sorted achievements
   const sortedAchievements = useMemo(() => {
@@ -640,7 +423,7 @@ export function Access() {
                      ach.stage === 'Сетевой' ? 150 :
                      ach.stage === 'Областной' ? 100 :
                      ach.stage === 'Городской' ? 75 : 50;
-        score += base;
+        score += ach.score ?? base;
       }
     }
     return score;
@@ -675,30 +458,55 @@ export function Access() {
     return parts.length > 1 ? parts[1] : parts[0];
   }, [profile?.fullName]);
 
-  const fetchLeaderboard = useCallback(async () => {
-    try {
-      setLoadingLeaderboard(true);
-      const token = await auth.currentUser?.getIdToken();
-      const res = await fetch('/api/student/leaderboard', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      const data = await res.json();
-      if (data.ok && Array.isArray(data.leaderboard)) {
-        setLeaderboard(data.leaderboard);
-        if (typeof data.userRank === 'number') setUserRank(data.userRank);
-      }
-    } catch {
-      // ignore
-    } finally {
-      setLoadingLeaderboard(false);
-    }
-  }, []);
-
   useEffect(() => {
-    if (session) {
-      void fetchLeaderboard();
-    }
-  }, [session, fetchLeaderboard]);
+    if (!session) return;
+    const controller = new AbortController();
+    let pending = false;
+    let running = false;
+    let debounce: number | undefined;
+    const refresh = async () => {
+      if (controller.signal.aborted || document.hidden) return;
+      if (running) { pending = true; return; }
+      running = true;
+      try {
+        const token = await session.user.getIdToken();
+        const res = await fetch('/api/student/leaderboard', {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store',
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+        });
+        const data = await readResponse(res);
+        if (!Array.isArray(data.leaderboard)) throw new Error('Invalid leaderboard response');
+        if (controller.signal.aborted) return;
+        setLeaderboard(data.leaderboard);
+        setUserRank(typeof data.userRank === 'number' ? data.userRank : null);
+        setLeaderboardError(false);
+      } catch {
+        if (!controller.signal.aborted) setLeaderboardError(true);
+      } finally {
+        running = false;
+        if (!controller.signal.aborted) setLoadingLeaderboard(false);
+        if (pending) { pending = false; void refresh(); }
+      }
+    };
+    const schedule = () => {
+      window.clearTimeout(debounce);
+      debounce = window.setTimeout(refresh, 180);
+    };
+    const stop = database ? onValue(ref(database, 'leaderboardRevision'), schedule, () => {}) : undefined;
+    const interval = window.setInterval(refresh, 45_000);
+    document.addEventListener('visibilitychange', schedule);
+    window.addEventListener('online', schedule);
+    schedule();
+    return () => {
+      controller.abort();
+      stop?.();
+      window.clearInterval(interval);
+      window.clearTimeout(debounce);
+      document.removeEventListener('visibilitychange', schedule);
+      window.removeEventListener('online', schedule);
+    };
+  }, [session, leaderboardRefresh]);
 
   // Load Admin Data (achievements & organizations)
   const loadAdminData = useCallback(async () => {
@@ -1041,19 +849,19 @@ export function Access() {
         {error && <p className="message private-message" role="alert">{error}</p>}
         {progress && <Progress status={progress} retry={() => void exit()} />}
 
-        <div className="student-dashboard">
+        <div className="student-dashboard student-shell">
           {/* Закрепленная строгая боковая панель */}
           <aside className="dashboard-sidebar" aria-label="Разделы ученика">
             <div className="sidebar-brand">
               <Logo />
-              <span className="brand-role-tag">STUDENT</span>
+              <span className="brand-role-tag">Кабинет ученика</span>
             </div>
 
-            <nav className="sidebar-nav">
+            <nav className="sidebar-nav" aria-label="Основные разделы">
               <button
                 type="button"
                 className="sidebar-tab-btn"
-                aria-selected={activeTab === 'home'}
+                aria-current={activeTab === 'home' ? 'page' : undefined}
                 onClick={() => { setActiveTab('home'); setIsAccountMenuOpen(false); }}
               >
                 <svg className="tab-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
@@ -1062,29 +870,29 @@ export function Access() {
               <button
                 type="button"
                 className="sidebar-tab-btn"
-                aria-selected={activeTab === 'grades'}
+                aria-current={activeTab === 'grades' ? 'page' : undefined}
                 onClick={() => { setActiveTab('grades'); setIsAccountMenuOpen(false); }}
               >
                 <svg className="tab-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-                <span>Мои оценки</span>
+                <span className="nav-label-desktop">Мои оценки</span><span className="nav-label-mobile">Оценки</span>
               </button>
               <button
                 type="button"
                 className="sidebar-tab-btn"
-                aria-selected={activeTab === 'achievements'}
+                aria-current={activeTab === 'achievements' ? 'page' : undefined}
                 onClick={() => { setActiveTab('achievements'); setIsAccountMenuOpen(false); }}
               >
                 <svg className="tab-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>
-                <span>Мои достижения</span>
+                <span className="nav-label-desktop">Мои достижения</span><span className="nav-label-mobile">Награды</span>
               </button>
               <button
                 type="button"
                 className="sidebar-tab-btn"
-                aria-selected={activeTab === 'leaderboard'}
+                aria-current={activeTab === 'leaderboard' ? 'page' : undefined}
                 onClick={() => { setActiveTab('leaderboard'); setIsAccountMenuOpen(false); }}
               >
                 <svg className="tab-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                <span>Лидерборд</span>
+                <span className="nav-label-desktop">Лидерборд</span><span className="nav-label-mobile">Рейтинг</span>
               </button>
             </nav>
 
@@ -1094,11 +902,12 @@ export function Access() {
               <button
                 type="button"
                 className="sidebar-tab-btn notifications-tab-btn"
-                aria-selected={activeTab === 'notifications'}
+                aria-current={activeTab === 'notifications' ? 'page' : undefined}
+                aria-label={unreadCount > 0 ? `Уведомления, непрочитанных: ${unreadCount}` : 'Уведомления'}
                 onClick={() => { setActiveTab('notifications'); setIsAccountMenuOpen(false); }}
               >
                 <svg className="tab-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                <span>Уведомления</span>
+                <span className="nav-label-desktop">Уведомления</span><span className="nav-label-mobile">Уведомл.</span>
                 {unreadCount > 0 && <span className="tab-badge-count">{unreadCount}</span>}
               </button>
 
@@ -1109,8 +918,10 @@ export function Access() {
                   className="sidebar-account-card"
                   onClick={() => setIsAccountMenuOpen(prev => !prev)}
                   aria-expanded={isAccountMenuOpen}
+                  aria-label="Меню аккаунта"
                 >
                   <span className="account-avatar">{displayName.charAt(0)}</span>
+                  <span className="nav-label-mobile">Профиль</span>
                   <div className="account-info">
                     <span className="account-name">{profile?.fullName || 'Ученик'}</span>
                     <span className="account-sub">{profile?.classLabel || 'Класс'} • {providers[profile?.source || 'bilimclass']}</span>
@@ -1233,15 +1044,14 @@ export function Access() {
                     <div className="preview-list">
                       {leaderboard.slice(0, 5).map((user, idx) => {
                         const rank = idx + 1;
-                        const isCurrentUser = user.isCurrentUser || user.name === profile?.fullName;
+                        const isCurrentUser = user.uid === session.user.uid;
 
                         return (
-                          <div
+                          <button
+                            type="button"
                             key={user.uid}
                             className={`preview-item ${isCurrentUser ? 'current-user-item' : ''}`}
                             onClick={() => setActiveTab('leaderboard')}
-                            role="button"
-                            tabIndex={0}
                             title="Открыть подробный лидерборд"
                           >
                             <div className="preview-rank">
@@ -1254,22 +1064,11 @@ export function Access() {
                               </div>
                               <small className="preview-user-class">{user.classLabel}</small>
                             </div>
-                            {/* Шкала среднего процента */}
-                            <div className="preview-percent-wrap">
-                              <div className="preview-percent-bar-track">
-                                <div
-                                  className="preview-percent-bar-fill"
-                                  style={{ width: `${Math.min(100, Math.max(0, user.averagePercent ?? 0))}%` }}
-                                />
-                              </div>
-                              <span className="preview-percent-value">
-                                {user.averagePercent !== null ? `${user.averagePercent}%` : '—'}
-                              </span>
-                            </div>
+                            <CircularGauge percent={user.averagePercent} compact />
                             <div className="preview-score">
-                              <span className="score-pill">{user.talentScore} pts</span>
+                              <span className="score-pill">{user.talentScore} баллов</span>
                             </div>
-                          </div>
+                          </button>
                         );
                       })}
                     </div>
@@ -1525,7 +1324,7 @@ export function Access() {
                 {/* Таблица оценок */}
                 <div className="table-card">
                   {currentSubjects.length > 0 ? (
-                    <table className="grades-table">
+                    <table className="grades-table school-grades-table" role="table">
                       <thead>
                         <tr>
                           <th>Предмет</th>
@@ -1542,14 +1341,14 @@ export function Access() {
 
                           return (
                             <tr key={`${sub.name}-${idx}`} className={isBest ? 'row-best' : ''}>
-                              <td>
+                              <td className="school-subject-cell" role="cell">
                                 <div className="subject-cell-title">
                                   <span>{sub.name}</span>
                                   {isBest && <span className="badge-top-tag">Топ</span>}
                                 </div>
                               </td>
                               {profile?.source === 'bilimclass' && (
-                                <td>
+                                <td className="school-formative-cell" data-label="ФО">
                                   {sub.formativeMarks.length > 0 ? (
                                     <div className="marks-chips-wrap">
                                       {sub.formativeMarks.map((m, mIdx) => (
@@ -1563,25 +1362,13 @@ export function Access() {
                                   )}
                                 </td>
                               )}
-                              <td>
-                                {sub.sorPercent !== null ? (
-                                  <span className={`percent-pill ${getScoreClass(sub.sorPercent)}`}>
-                                    {sub.sorPercent}%
-                                  </span>
-                                ) : (
-                                  <span style={{ color: 'var(--muted)' }}>—</span>
-                                )}
+                              <td data-label="СОР">
+                                <AssessmentCell percent={sub.sorPercent} colorPercent={sub.sorColorPercent} marks={sub.sorMarks} />
                               </td>
-                              <td>
-                                {sub.sochPercent !== null ? (
-                                  <span className={`percent-pill ${getScoreClass(sub.sochPercent)}`}>
-                                    {sub.sochPercent}%
-                                  </span>
-                                ) : (
-                                  <span style={{ color: 'var(--muted)' }}>—</span>
-                                )}
+                              <td data-label="СОЧ">
+                                <AssessmentCell percent={sub.sochPercent} colorPercent={sub.sochColorPercent} marks={sub.sochMarks} />
                               </td>
-                              <td>
+                              <td data-label="Итоговый %">
                                 {pct !== null ? (
                                   <span className={`percent-pill ${getScoreClass(pct)}`}>
                                     {pct}% {sub.quarterGrade ? `(${sub.quarterGrade})` : ''}
@@ -1692,113 +1479,80 @@ export function Access() {
               </section>
             )}
 
-            {/* Вкладка 4: Лидерборд */}
             {activeTab === 'leaderboard' && (
               <section aria-labelledby="leaderboard-heading" className="leaderboard-section">
-                <div className="dashboard-title-row">
+                <header className="dashboard-title-row leaderboard-heading">
                   <div>
-                    <h2 id="leaderboard-heading">Лидерборд по TalentScore</h2>
-                    <p style={{ color: 'var(--muted)', fontSize: '14px', margin: '4px 0 0' }}>
-                      Рейтинг среди пользователей сайта. Баллы начисляются за подтверждённые олимпиады и сертификаты.
-                    </p>
+                    <h2 id="leaderboard-heading">Лидерборд</h2>
+                    <p>Рейтинг учеников по баллам за подтверждённые достижения.</p>
                   </div>
-                  <button
-                    type="button"
-                    className="action-button secondary"
-                    onClick={() => void fetchLeaderboard()}
-                    disabled={loadingLeaderboard}
-                  >
-                    {loadingLeaderboard ? 'Обновление...' : 'Обновить'}
-                  </button>
-                </div>
+                </header>
 
-                {/* Баннер с местом пользователя */}
-                <div className="user-rank-banner">
-                  <div className="user-rank-col">
-                    <span className="user-rank-label">Ваше место в рейтинге</span>
-                    <strong className="user-rank-number">#{userRank ?? '—'}</strong>
+                <div className="leaderboard-summary">
+                  <div className="leaderboard-standing">
+                    <span>Ваше место</span>
+                    <strong>{userRank === null ? '—' : '#' + userRank}</strong>
+                    {leaderboard.length > 0 && <small>из {leaderboard.length} в рейтинге</small>}
                   </div>
-                  <div className="user-rank-col">
-                    <span className="user-rank-label">Ваш TalentScore</span>
-                    <strong className="user-rank-score">{userTalentScore} pts</strong>
-                  </div>
-                  <div className="user-rank-col">
-                    <span className="user-rank-label">Средний процент</span>
-                    <strong className="user-rank-score">{overallAveragePercent !== null ? `${overallAveragePercent}%` : '—'}</strong>
-                  </div>
-                  <div className="user-rank-col">
-                    <span className="user-rank-label">Достижений в профиле</span>
-                    <strong className="user-rank-score">{Object.keys(achievements).length}</strong>
+                  <dl className="leaderboard-stats">
+                    <div>
+                      <dt>TalentScore</dt>
+                      <dd>{leaderboard.find(item => item.uid === session.user.uid)?.talentScore ?? userTalentScore}<small> баллов</small></dd>
+                    </div>
+                    <div>
+                      <dt>Достижения</dt>
+                      <dd>{Object.keys(achievements).length}</dd>
+                    </div>
+                  </dl>
+                  <div className="leaderboard-average">
+                    <CircularGauge percent={overallAveragePercent} />
+                    <span>Средний процент <small>За всё время</small></span>
                   </div>
                 </div>
 
-                {/* Таблица полного лидерборда */}
-                <div className="table-card">
+                <div className="ranking-panel">
+                  <header className="ranking-panel-heading">
+                    <h3>Участники</h3>
+                    <span className="leaderboard-status" role="status">
+                      {leaderboardError ? 'Не удалось обновить рейтинг' : loadingLeaderboard ? 'Загружаем рейтинг…' : 'Обновляется автоматически'}
+                    </span>
+                    {leaderboardError && <button type="button" className="text-button" onClick={() => setLeaderboardRefresh(value => value + 1)}>Повторить</button>}
+                  </header>
                   {leaderboard.length > 0 ? (
-                    <table className="grades-table leaderboard-table">
-                      <thead>
-                        <tr>
-                          <th style={{ width: '70px' }}>Место</th>
-                          <th>Ученик</th>
-                          <th>Школа / Класс</th>
-                          <th style={{ width: '180px' }}>Средний процент</th>
-                          <th style={{ textAlign: 'center', width: '110px' }}>Достижений</th>
-                          <th style={{ textAlign: 'right', width: '140px' }}>TalentScore</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {leaderboard.map((item, idx) => {
-                          const rank = idx + 1;
-                          const isCurrent = item.isCurrentUser || item.name === profile?.fullName;
-
+                    <>
+                      <div className="ranking-columns" aria-hidden="true">
+                        <span>Место</span><span>Ученик</span><span>Средний процент</span><span>Достижения</span><span>TalentScore</span>
+                      </div>
+                      <ol className="ranking-list" role="list">
+                        {leaderboard.map((item, index) => {
+                          const isCurrent = item.uid === session.user.uid;
                           return (
-                            <tr key={item.uid} className={isCurrent ? 'row-best current-user-row' : ''}>
-                              <td>
-                                <span className={`leaderboard-rank-tag rank-${rank}`}>
-                                  #{rank}
-                                </span>
-                              </td>
-                              <td>
-                                <div className="leader-name-wrap">
-                                  <span className="leader-avatar">{item.name.charAt(0)}</span>
-                                  <div>
-                                    <strong>{item.name}</strong>
-                                    {isCurrent && <span className="you-pill">Вы</span>}
-                                  </div>
+                            <li key={item.uid} className={isCurrent ? 'ranking-row current-user-row' : 'ranking-row'}>
+                              <span className="ranking-position" aria-label={'Место ' + (index + 1)}>#{index + 1}</span>
+                              <div className="ranking-identity">
+                                <span className="leader-avatar" aria-hidden="true">{item.name.charAt(0)}</span>
+                                <div>
+                                  <strong>{item.name}</strong>
+                                  {isCurrent && <span className="you-pill">Вы</span>}
+                                  <small>{item.classLabel}</small>
                                 </div>
-                              </td>
-                              <td>
-                                <span className="leader-class">{item.classLabel}</span>
-                              </td>
-                              {/* Шкала среднего процента в лидерборде */}
-                              <td>
-                                <div className="preview-percent-wrap">
-                                  <div className="preview-percent-bar-track">
-                                    <div
-                                      className="preview-percent-bar-fill"
-                                      style={{ width: `${Math.min(100, Math.max(0, item.averagePercent ?? 0))}%` }}
-                                    />
-                                  </div>
-                                  <span className="preview-percent-value">
-                                    {item.averagePercent !== null ? `${item.averagePercent}%` : '—'}
-                                  </span>
-                                </div>
-                              </td>
-                              <td style={{ textAlign: 'center' }}>
-                                <span className="achievements-count-tag">{item.achievementsCount}</span>
-                              </td>
-                              <td style={{ textAlign: 'right' }}>
-                                <span className="talent-score-pill">{item.talentScore} pts</span>
-                              </td>
-                            </tr>
+                              </div>
+                              <div className="ranking-gauge"><CircularGauge percent={item.averagePercent} compact /></div>
+                              <div className="ranking-achievements">
+                                <span className="ranking-metric-label">Достижения</span>
+                                <strong>{item.achievementsCount}</strong>
+                              </div>
+                              <div className="ranking-score">
+                                <span className="ranking-metric-label">TalentScore</span>
+                                <strong>{item.talentScore}</strong>
+                              </div>
+                            </li>
                           );
                         })}
-                      </tbody>
-                    </table>
-                  ) : (
-                    <div className="empty-state">
-                      <p>В лидерборде пока нет зарегистрированных учеников.</p>
-                    </div>
+                      </ol>
+                    </>
+                  ) : !loadingLeaderboard && !leaderboardError && (
+                    <p className="empty-state">В рейтинге пока нет участников.</p>
                   )}
                 </div>
               </section>
@@ -1992,25 +1746,25 @@ export function Access() {
           <aside className="dashboard-sidebar" aria-label="Панель организации">
             <div className="sidebar-brand">
               <Logo />
-              <span className="brand-role-tag">{isAdmin ? 'ADMIN' : 'ORGANIZATION'}</span>
+              <span className="brand-role-tag">{isAdmin ? 'Панель администратора' : 'Кабинет организации'}</span>
             </div>
 
-            <nav className="sidebar-nav">
+            <nav className="sidebar-nav" aria-label="Основные разделы">
               {isAdmin ? (
                 <>
                   <button
                     type="button"
                     className="sidebar-tab-btn"
-                    aria-selected={adminTab === 'achievements'}
+                    aria-current={adminTab === 'achievements' ? 'page' : undefined}
                     onClick={() => { setAdminTab('achievements'); setIsAccountMenuOpen(false); }}
                   >
                     <svg className="tab-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>
-                    <span>Модерация олимпиад</span>
+                    <span className="nav-label-desktop">Модерация олимпиад</span><span className="nav-label-mobile">Проверка</span>
                   </button>
                   <button
                     type="button"
                     className="sidebar-tab-btn"
-                    aria-selected={adminTab === 'organizations'}
+                    aria-current={adminTab === 'organizations' ? 'page' : undefined}
                     onClick={() => { setAdminTab('organizations'); setIsAccountMenuOpen(false); }}
                   >
                     <svg className="tab-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
@@ -2019,11 +1773,11 @@ export function Access() {
                   <button
                     type="button"
                     className="sidebar-tab-btn"
-                    aria-selected={adminTab === 'leaderboard'}
+                    aria-current={adminTab === 'leaderboard' ? 'page' : undefined}
                     onClick={() => { setAdminTab('leaderboard'); setIsAccountMenuOpen(false); }}
                   >
                     <svg className="tab-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                    <span>Лидерборд</span>
+                    <span className="nav-label-desktop">Лидерборд</span><span className="nav-label-mobile">Рейтинг</span>
                   </button>
                 </>
               ) : (
@@ -2031,16 +1785,16 @@ export function Access() {
                   <button
                     type="button"
                     className="sidebar-tab-btn"
-                    aria-selected={orgTab === 'leaderboard'}
+                    aria-current={orgTab === 'leaderboard' ? 'page' : undefined}
                     onClick={() => { setOrgTab('leaderboard'); setIsAccountMenuOpen(false); }}
                   >
                     <svg className="tab-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                    <span>Лидерборд</span>
+                    <span className="nav-label-desktop">Лидерборд</span><span className="nav-label-mobile">Рейтинг</span>
                   </button>
                   <button
                     type="button"
                     className="sidebar-tab-btn"
-                    aria-selected={orgTab === 'subscription'}
+                    aria-current={orgTab === 'subscription' ? 'page' : undefined}
                     onClick={() => { setOrgTab('subscription'); setIsAccountMenuOpen(false); }}
                   >
                     <svg className="tab-svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
@@ -2057,10 +1811,12 @@ export function Access() {
                   className="sidebar-account-card"
                   onClick={() => setIsAccountMenuOpen(prev => !prev)}
                   aria-expanded={isAccountMenuOpen}
+                  aria-label="Меню аккаунта"
                 >
                   <span className="account-avatar">
                     {isAdmin ? 'T' : (application?.name?.charAt(0) || 'O')}
                   </span>
+                  <span className="nav-label-mobile">Аккаунт</span>
                   <div className="account-info">
                     <span className="account-name">
                       {isAdmin ? 'Tair Tasmukhambetov' : (application?.name || 'Организация')}
@@ -2132,7 +1888,7 @@ export function Access() {
                     <p style={{ margin: '6px 0 0', color: '#64748b', fontSize: '13px' }}>Здесь будут появляться все дипломы и грамоты, загруженные учениками.</p>
                   </div>
                 ) : (
-                  <table className="admin-table">
+                  <div className="table-responsive" role="region" aria-label="Достижения на проверке" tabIndex={0}><table className="admin-table">
                     <thead>
                       <tr>
                         <th>Ученик</th>
@@ -2231,7 +1987,7 @@ export function Access() {
                         );
                       })}
                     </tbody>
-                  </table>
+                  </table></div>
                 )}
               </section>
             )}
@@ -2259,7 +2015,7 @@ export function Access() {
                     <p style={{ margin: '6px 0 0', color: '#64748b', fontSize: '13px' }}>Здесь будут отображаться зарегистрированные компании и фонды.</p>
                   </div>
                 ) : (
-                  <table className="admin-table">
+                  <div className="table-responsive" role="region" aria-label="Заявки организаций" tabIndex={0}><table className="admin-table">
                     <thead>
                       <tr>
                         <th>Организация / БИН</th>
@@ -2328,7 +2084,7 @@ export function Access() {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                  </table></div>
                 )}
               </section>
             )}
@@ -2368,7 +2124,7 @@ export function Access() {
                   </div>
                 </div>
 
-                <div className="table-responsive">
+                <div className="table-responsive" tabIndex={0} role="region" aria-label="Таблица рейтинга">
                   <table className="leaderboard-table">
                     <thead>
                       <tr>
@@ -2378,14 +2134,12 @@ export function Access() {
                         <th>Регион</th>
                         <th>TalentScore</th>
                         <th>Олимпиад</th>
-                        <th style={{ width: '180px' }}>Средний балл</th>
+                        <th scope="col">Средний процент</th>
                       </tr>
                     </thead>
                     <tbody>
                       {orgFilteredLeaderboard.map((item, idx) => {
                         const rankClass = idx === 0 ? 'rank-1' : idx === 1 ? 'rank-2' : idx === 2 ? 'rank-3' : '';
-                        const pct = item.averagePercent;
-                        const pctClass = pct !== null && pct >= 80 ? 'score-green' : pct !== null && pct >= 65 ? 'score-yellow' : pct !== null ? 'score-red' : '';
 
                         return (
                           <tr
@@ -2425,17 +2179,7 @@ export function Access() {
                               </span>
                             </td>
                             <td>
-                              <div className="preview-percent-wrap">
-                                <div className="preview-percent-bar-track">
-                                  <div
-                                    className={`preview-percent-bar-fill ${pctClass}`}
-                                    style={{ width: `${pct !== null ? Math.min(100, Math.max(0, pct)) : 0}%` }}
-                                  />
-                                </div>
-                                <span className={`preview-percent-value ${pctClass}`}>
-                                  {pct !== null ? `${pct}%` : '—'}
-                                </span>
-                              </div>
+                              <CircularGauge percent={item.averagePercent} compact />
                             </td>
                           </tr>
                         );

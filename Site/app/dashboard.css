@@ -1,0 +1,240 @@
+.leaderboard-heading { margin-block-end: 1.5rem; }
+.leaderboard-heading h2 {
+  font-size: clamp(1.85rem, 3.5vw, 2.75rem);
+  line-height: 1.12;
+  letter-spacing: -.045em;
+}
+.leaderboard-heading p { margin: .6rem 0 0; color: var(--muted); line-height: 1.5; }
+
+.leaderboard-summary {
+  display: grid;
+  grid-template-columns: minmax(0, .95fr) minmax(0, 1.25fr) minmax(0, 1.1fr);
+  margin-block-end: 1.5rem;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--white);
+}
+.leaderboard-standing {
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: .4rem;
+  padding: clamp(1.1rem, 3vw, 2rem);
+  background: var(--navy);
+  color: #f1f7fd;
+}
+.leaderboard-standing strong {
+  color: #fff;
+  font-size: clamp(2rem, 5vw, 3.4rem);
+  font-weight: 760;
+  line-height: 1;
+  letter-spacing: -.055em;
+  font-variant-numeric: tabular-nums;
+}
+.leaderboard-standing small { color: #c7d9eb; }
+.leaderboard-stats {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem 1.4rem;
+  margin: 0;
+  padding: clamp(1.1rem, 3vw, 2rem);
+}
+.leaderboard-stats dt { color: var(--muted); font-size: .85rem; }
+.leaderboard-stats dd {
+  margin: .4rem 0 0;
+  font-size: clamp(1.3rem, 2.8vw, 1.9rem);
+  font-weight: 720;
+  line-height: 1.1;
+}
+.leaderboard-stats dd small { font-size: .75rem; color: var(--muted); font-weight: 500; }
+.leaderboard-average {
+  display: flex;
+  align-items: center;
+  gap: .8rem;
+  padding: 1rem clamp(.9rem, 2vw, 1.6rem);
+  border-inline-start: 1px solid var(--line);
+  font-size: .87rem;
+  font-weight: 650;
+}
+.leaderboard-average small { display: block; margin-top: .3rem; color: var(--muted); font-weight: 450; }
+.leaderboard-average .gauge-wrapper { width: 4.75rem; }
+
+.ranking-panel { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--white); }
+.ranking-panel-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .5rem 1rem;
+  padding: 1rem 1.25rem;
+}
+.ranking-panel-heading h3 { margin: 0 auto 0 0; font-size: 1.1rem; }
+.leaderboard-status { color: var(--muted); font-size: .78rem; }
+.ranking-columns, .ranking-row {
+  display: grid;
+  grid-template-columns: minmax(2.8rem, .55fr) minmax(0, 3fr) minmax(0, 1.25fr) minmax(0, .95fr) minmax(0, .95fr);
+  align-items: center;
+  gap: .75rem;
+  padding: .75rem 1.25rem;
+  border-block-start: 1px solid #e3eaf1;
+}
+.ranking-columns { color: #526579; background: #f5f8fb; font-size: .76rem; font-weight: 620; }
+.ranking-columns > :nth-child(n+3), .ranking-gauge, .ranking-achievements, .ranking-score { text-align: center; }
+.ranking-list { margin: 0; padding: 0; list-style: none; }
+.ranking-row { min-block-size: 4.6rem; }
+.ranking-row.current-user-row { background: #edf5fc; box-shadow: inset 3px 0 #24659c; }
+.ranking-identity { display: flex; align-items: center; gap: .65rem; min-width: 0; font-size: .9rem; }
+.ranking-identity > div { min-width: 0; }
+.ranking-identity small { display: block; margin-top: .22rem; color: var(--muted); font-size: .75rem; }
+.ranking-identity .you-pill { display: inline-block; margin-inline-start: .4rem; }
+.ranking-position, .ranking-achievements, .ranking-score { font-variant-numeric: tabular-nums; }
+.ranking-position { color: var(--blue); font-weight: 700; font-size: .88rem; }
+.ranking-gauge .gauge-wrapper { margin-inline: auto; }
+.ranking-metric-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.gauge-compact { width: 3.2rem; }
+.gauge-compact .gauge-text { font-size: .76rem; }
+.ranking-panel .empty-state { margin: 0; border-top: 1px solid var(--line); }
+
+.assessment-cell { display: grid; justify-items: start; gap: .45rem; }
+.assessment-cell .mark-chip { min-height: 1.6rem; }
+.grade-missing { color: var(--muted); }
+.school-grades-table .subject-cell-title { flex-wrap: wrap; }
+.filter-select { max-width: 100%; }
+.metric-card-top, .metric-card-footer, .preview-header, .notification-header-row, .profile-identity-card { flex-wrap: wrap; }
+.metric-card-top { gap: .4rem; }
+.metric-card-footer p { flex-basis: 9rem; }
+.table-responsive { max-width: 100%; overflow-x: auto; }
+.table-responsive > table { width: 100%; min-width: 40rem; text-align: left; border-collapse: collapse; }
+.table-responsive td { border-top: 1px solid var(--line); }
+.modal-dialog { max-block-size: calc(100dvh - 2rem); overflow-y: auto; padding: clamp(1rem, 4vw, 1.75rem); }
+.progress-card { z-index: 60; }
+
+@container (max-width: 45rem) {
+  .leaderboard-summary { grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); }
+  .leaderboard-average { grid-column: 1 / -1; border-inline-start: 0; border-block-start: 1px solid var(--line); }
+  .ranking-columns { display: none; }
+  .ranking-row {
+    grid-template-columns: minmax(2.35rem, auto) minmax(0, 1fr) auto;
+    grid-template-areas: "position identity gauge" ". achievements score";
+    gap: .55rem .65rem;
+    padding: .75rem 1rem;
+  }
+  .ranking-position { grid-area: position; }
+  .ranking-identity { grid-area: identity; }
+  .ranking-gauge { grid-area: gauge; }
+  .ranking-achievements { grid-area: achievements; }
+  .ranking-score { grid-area: score; }
+  .ranking-achievements, .ranking-score { display: grid; justify-items: start; text-align: start; gap: .2rem; }
+  .ranking-metric-label { position: static; width: auto; height: auto; clip-path: none; white-space: normal; color: var(--muted); font-size: .72rem; }
+}
+
+@container (max-width: 35rem) {
+  .school-grades-table, .school-grades-table tbody { display: block; }
+  .school-grades-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .school-grades-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: .75rem;
+    padding: .875rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .school-grades-table tbody tr:last-child { border-bottom: 0; }
+  .school-grades-table td { display: block; padding: 0; border: 0; }
+  .school-grades-table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: .35rem;
+    color: var(--muted);
+    font-size: .72rem;
+    font-weight: 620;
+  }
+  .school-subject-cell, .school-formative-cell { grid-column: 1 / -1; }
+  .school-grades-table .marks-chips-wrap { max-width: none; }
+}
+
+@media (max-width: 54rem) {
+  .student-dashboard {
+    --dashboard-nav-space: calc(4.75rem + env(safe-area-inset-bottom, 0px));
+    display: block;
+    padding-block-end: var(--dashboard-nav-space);
+  }
+  .dashboard-content { padding: 1.25rem clamp(.75rem, 4vw, 1.5rem) 1.75rem; }
+  .dashboard-sidebar {
+    position: fixed;
+    inset: auto 0 0;
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 0;
+    block-size: auto;
+    padding: .35rem max(.25rem, env(safe-area-inset-right, 0px)) calc(.35rem + env(safe-area-inset-bottom, 0px)) max(.25rem, env(safe-area-inset-left, 0px));
+    border: 0;
+    border-block-start: 1px solid #d4e0ea;
+    box-shadow: 0 -5px 24px #12315012;
+    overflow: visible;
+  }
+  .sidebar-brand, .nav-label-desktop, .sidebar-account-card .account-info, .sidebar-account-card .account-chevron { display: none; }
+  .nav-label-mobile { display: inline; }
+  .sidebar-nav, .sidebar-bottom { display: contents; }
+  .sidebar-nav .sidebar-tab-btn, .sidebar-bottom .sidebar-tab-btn, .sidebar-account-container { flex: 1 1 0; min-width: 0; }
+  .sidebar-tab-btn, .sidebar-account-card {
+    position: relative;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: .25rem;
+    width: 100%;
+    min-height: 3.5rem;
+    padding: .3rem .05rem;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: #45576b;
+    text-align: center;
+    font-size: clamp(.55rem, 2.05vw, .75rem);
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+  }
+  .sidebar-tab-btn[aria-current]::before { inset: 0 33% auto; width: auto; height: 2px; border-radius: 0 0 3px 3px; }
+  .sidebar-account-card .account-avatar { width: 1.2rem; height: 1.2rem; font-size: .7rem; }
+  .tab-badge-count { position: absolute; top: .25rem; inset-inline-start: calc(50% + .25rem); margin: 0; }
+  .account-dropdown-menu { inset-inline: auto 0; width: min(12rem, calc(100vw - 1rem)); }
+  .progress-card {
+    right: .75rem;
+    bottom: calc(4.5rem + env(safe-area-inset-bottom, 0px));
+    width: min(20rem, calc(100vw - 1.5rem));
+    max-height: calc(100dvh - 5.5rem);
+    overflow-y: auto;
+  }
+}
+
+@container (max-width: 23rem) {
+  .ranking-panel-heading { padding-inline: .875rem; }
+  .ranking-row { padding-inline: .75rem; }
+  .ranking-identity .leader-avatar { display: none; }
+  .preview-item { gap: .35rem; padding-inline: .4rem; }
+  .preview-rank { width: 1.25rem; }
+  .preview-item .score-pill { white-space: normal; }
+  .home-metric-card, .home-leaderboard-preview-card { padding-inline: .875rem; }
+  .school-grades-table tbody tr { gap: .65rem .35rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gauge-fill, .sidebar-tab-btn, .sidebar-account-card { transition: none; }
+  .modal-dialog { animation: none; }
+}

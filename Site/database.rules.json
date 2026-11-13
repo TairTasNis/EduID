@@ -2,6 +2,7 @@
   "rules": {
     ".read": false,
     ".write": false,
+    "leaderboardRevision": { ".read": "auth != null" },
     "students": {
       "$uid": {
         ".read": "auth != null && auth.uid === $uid && auth.token.accountType === 'student'",
