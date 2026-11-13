@@ -293,6 +293,94 @@ export function Access() {
   // Lightbox viewer for certificates
   const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
 
+  // SUSH direct client-side import state
+  const [syncModalOpen, setSyncModalOpen] = useState(false);
+  const [syncPassword, setSyncPassword] = useState('');
+  const [syncIin, setSyncIin] = useState('');
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncError, setSyncError] = useState('');
+  const [syncProgress, setSyncProgress] = useState<{ current: number; total: number; year: string } | null>(null);
+
+  const triggerSushImport = useCallback(async (
+    login: string,
+    pass: string,
+    years: string[],
+    authToken?: string
+  ) => {
+    if (!login || !pass || !years.length) return;
+    setSyncBusy(true);
+    setSyncError('');
+    try {
+      const user = auth.currentUser;
+      if (!user) return;
+      const token = authToken || (await user.getIdToken());
+      if (!token) return;
+
+      for (let i = 0; i < years.length; i++) {
+        const year = years[i];
+        setSyncProgress({ current: i + 1, total: years.length, year });
+        if (database) {
+          await update(ref(database, `students/${user.uid}/import`), {
+            status: 'running',
+            currentYear: year,
+            completed: i,
+            total: years.length,
+            message: null,
+            updatedAt: Date.now(),
+          }).catch(() => {});
+        }
+
+        const res = await fetch('https://eduid-sush-verify.tasmukhambetov-t08.workers.dev/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'import_year',
+            login,
+            password: pass,
+            year,
+          }),
+        });
+
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data?.success || !data?.grades) {
+          const errMsg = data?.error || `СУШ не вернул оценки за ${year} год.`;
+          if (database) {
+            await update(ref(database, `students/${user.uid}/import`), {
+              status: 'failed',
+              message: errMsg,
+              updatedAt: Date.now(),
+            }).catch(() => {});
+          }
+          throw new Error(errMsg);
+        }
+
+        const isLast = (i === years.length - 1);
+        await fetch('/api/student/grades', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            year,
+            grades: data.grades,
+            completed: isLast,
+            total: years.length,
+            currentCount: i + 1,
+          }),
+        });
+      }
+      setSyncModalOpen(false);
+      setSyncPassword('');
+    } catch (err: any) {
+      console.error('Sush import error:', err);
+      setSyncError(err?.message || 'Ошибка импорта оценок.');
+    } finally {
+      setSyncBusy(false);
+      setSyncProgress(null);
+    }
+  }, []);
+
   const currentTab = session?.kind === 'student' ? activeTab : isAdmin ? adminTab : orgTab;
   useEffect(() => { window.scrollTo(0, 0); }, [currentTab]);
 
@@ -348,6 +436,19 @@ export function Access() {
       setApplication(snap.val()); setLoadedApplication(true);
     }, () => { setLoadedApplication(true); unreadable(); });
   }, [session]);
+
+  useEffect(() => {
+    if (session?.kind === 'student' && profile?.source === 'sush') {
+      try {
+        const savedPass = sessionStorage.getItem('sush_pass');
+        const savedLogin = sessionStorage.getItem('sush_login') || profile?.login || '';
+        const years = profile?.schoolYears || [];
+        if (savedPass && savedLogin && years.length && progress && progress.status === 'running' && progress.completed === 0 && !syncBusy) {
+          void triggerSushImport(savedLogin, savedPass, years);
+        }
+      } catch {}
+    }
+  }, [session, profile, progress?.status, progress?.completed, syncBusy, triggerSushImport]);
 
   // Available academic years
   const availableYears = useMemo(() => {
@@ -854,6 +955,17 @@ export function Access() {
           throw new Error('EduID подтвердил данные, но не смог открыть сессию. Повторите вход.');
         });
         setProfile(loadedProfile);
+        if (source === 'sush') {
+          const sushLogin = String(fields.get('login') ?? '').trim();
+          try {
+            sessionStorage.setItem('sush_login', sushLogin);
+            sessionStorage.setItem('sush_pass', password);
+          } catch {}
+          const years = loadedProfile?.schoolYears || [];
+          if (years.length) {
+            void triggerSushImport(sushLogin, password, years, token);
+          }
+        }
       } else {
         const email = String(fields.get('email') ?? '').trim().toLowerCase();
         if (mode === 'login') {
@@ -923,7 +1035,21 @@ export function Access() {
     return (
       <div className="private-page">
         {error && <p className="message private-message" role="alert">{error}</p>}
-        {progress && <Progress status={progress} retry={() => void exit()} />}
+        {progress && (
+          <Progress
+            status={progress}
+            retry={() => {
+              if (profile?.source === 'sush') {
+                setSyncIin(profile?.login || sessionStorage.getItem('sush_login') || '');
+                setSyncPassword('');
+                setSyncError('');
+                setSyncModalOpen(true);
+              } else {
+                void exit();
+              }
+            }}
+          />
+        )}
 
         <div className="student-dashboard student-shell">
           {/* Закрепленная строгая боковая панель */}
@@ -1808,6 +1934,91 @@ export function Access() {
                 ×
               </button>
               <img src={viewingPhotoUrl} alt="Сертификат в полном размере" className="lightbox-img" />
+            </div>
+          </div>
+        )}
+
+        {/* Модальное окно синхронизации оценок СУШ */}
+        {syncModalOpen && (
+          <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="sync-modal-title">
+            <div className="modal-dialog">
+              <div className="modal-header">
+                <h3 id="sync-modal-title">Синхронизация оценок СУШ</h3>
+                <button
+                  type="button"
+                  className="modal-close"
+                  onClick={() => !syncBusy && setSyncModalOpen(false)}
+                  aria-label="Закрыть"
+                >
+                  ×
+                </button>
+              </div>
+
+              <form onSubmit={async (e) => {
+                e.preventDefault();
+                try {
+                  sessionStorage.setItem('sush_login', syncIin);
+                  sessionStorage.setItem('sush_pass', syncPassword);
+                } catch {}
+                const years = profile?.schoolYears || [];
+                await triggerSushImport(syncIin, syncPassword, years);
+              }} className="modal-form">
+                <p style={{ margin: '0 0 12px', fontSize: '14px', color: 'var(--text-secondary)' }}>
+                  Загрузка оценок выполняется напрямую с вашего устройства через казахстанский шлюз.
+                </p>
+
+                <Field label="ИИН">
+                  <input
+                    type="text"
+                    value={syncIin}
+                    onChange={(e) => setSyncIin(e.target.value)}
+                    required
+                    maxLength={12}
+                    pattern="[0-9]{12}"
+                    placeholder="12 цифр ИИН"
+                    disabled={syncBusy}
+                  />
+                </Field>
+
+                <Field label="Пароль школьного сервиса СУШ">
+                  <input
+                    type="password"
+                    value={syncPassword}
+                    onChange={(e) => setSyncPassword(e.target.value)}
+                    required
+                    maxLength={256}
+                    placeholder="Пароль СУШ"
+                    disabled={syncBusy}
+                  />
+                </Field>
+
+                {syncProgress && (
+                  <div style={{ marginTop: '8px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                    Загрузка оценок за {syncProgress.year} год ({syncProgress.current} из {syncProgress.total})…
+                  </div>
+                )}
+
+                {syncError && <p className="message error" role="alert" style={{ marginTop: '8px' }}>{syncError}</p>}
+
+                <div className="modal-actions">
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => setSyncModalOpen(false)}
+                    disabled={syncBusy}
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    type="submit"
+                    className="primary"
+                    style={{ minHeight: '40px', padding: '0 18px' }}
+                    disabled={syncBusy || !syncPassword}
+                  >
+                    {syncBusy ? 'Синхронизация…' : 'Синхронизировать'}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}

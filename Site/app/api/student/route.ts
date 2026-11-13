@@ -54,9 +54,9 @@ export async function POST(request: Request) {
         const school = await loadProfile(account);
         await provisionStudentAuth(auth, identity);
         years = school.years;
-        profile = { ...profile, ...school.profile, schoolYears: years };
+        profile = { ...profile, ...school.profile, login, schoolYears: years };
         await db.ref().update({
-          ...Object.fromEntries(Object.entries({ ...school.profile, schoolYears: years })
+          ...Object.fromEntries(Object.entries({ ...school.profile, login, schoolYears: years })
             .map(([field, value]) => [`students/${uid}/profile/${field}`, value])),
           [leaderboardRevision]: nextLeaderboardRevision(),
         });
@@ -73,7 +73,7 @@ export async function POST(request: Request) {
       years = school.years;
       const region = (parsed.data.region || '').trim() || (source === 'sush' ? 'Актюбинская область' : 'г. Астана');
       const now = Date.now();
-      profile = { ...school.profile, region, schoolYears: years, createdAt: now, importConsentAt: now, consentVersion: 1 };
+      profile = { ...school.profile, login, region, schoolYears: years, createdAt: now, importConsentAt: now, consentVersion: 1 };
       await provisionStudentAuth(auth, identity);
       const created = await profileRef.transaction(current => current ? undefined : profile);
       if (!created.committed) throw new HttpError(409, 'Аккаунт EduID уже создан. Войдите с теми же данными.', 'account_exists');
@@ -94,8 +94,12 @@ export async function POST(request: Request) {
     const token = await auth.createCustomToken(uid, { accountType: 'student' });
     after(async () => {
       try {
-        const job = await startImport(db, uid, years);
-        if (job) await runImport(db, uid, account, job, deadline);
+        if (source === 'bilimclass') {
+          const job = await startImport(db, uid, years);
+          if (job) await runImport(db, uid, account, job, deadline);
+        } else if (source === 'sush') {
+          await startImport(db, uid, years);
+        }
       } catch {
         console.error('EduID could not start the grade import');
       }

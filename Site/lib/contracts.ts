@@ -33,6 +33,7 @@ export const KAZAKHSTAN_REGIONS = [
 
 export type StudentProfile = {
   fullName: string; classNumber: number; classLetter: string; classLabel: string; source: SchoolSource; region?: string;
+  login?: string; schoolYears?: string[];
 };
 export type ImportStatus = {
   status: 'running' | 'complete' | 'failed'; completed: number; total: number;

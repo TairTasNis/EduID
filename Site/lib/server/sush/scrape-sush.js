@@ -482,7 +482,7 @@ async function scrapeSchoolYear({
     // The login is shared, but each iframe receives its own diary cookie and context.
     const results = await Promise.allSettled(periods.map(async (period) => {
       const diary = client.forkDiarySession();
-      const subjects = await diary.getDiaryData(period.Id, year.Id);
+      const subjects = await diary.getDiaryData(period.Id, year.Id, { skipDetails: true });
       const sessionId = diary.getCookies().get("Aktobe_jce_SessionID");
       if (subjects.length && !sessionId) throw new Error("СУШ не создал отдельную сессию дневника.");
       completed++;
@@ -509,15 +509,7 @@ async function scrapeSchoolYear({
     }
   }
 
-  if (!parallelComplete && allSubjects.length) {
-    pushTrace("subject_details_fetch_start", { yearId: year.Id, subjectsCount: allSubjects.length });
-    await client.fetchAllSubjectDetails(allSubjects, {
-      onSubjectComplete: ({ completed, total }) => {
-        progress(0.32 + (0.53 * completed) / total, `${year.inferredClassName}: оценки по предметам ${completed}/${total}`);
-      },
-    });
-    pushTrace("subject_details_fetch_done", { yearId: year.Id, subjectsCount: allSubjects.length });
-  } else if (!allSubjects.length) {
+  if (!allSubjects.length) {
     progress(0.85, `${year.inferredClassName}: оценки по четвертям не найдены`);
   }
 

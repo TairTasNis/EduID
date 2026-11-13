@@ -89,6 +89,48 @@ export default {
     const captcha = typeof input.captcha === 'string' && input.captcha.trim() ? input.captcha.trim() : undefined;
     const sessionToken = typeof input.sessionToken === 'string' && input.sessionToken.trim() ? input.sessionToken.trim() : undefined;
 
+    if (input.action === 'import_year') {
+      const year = String(input.year || '').trim();
+      if (!year) return reply({ error: 'Укажите учебный год.' }, 400);
+
+      const result = await scrapeSush({
+        client,
+        iin: input.login,
+        password: input.password,
+        captcha,
+        sessionToken,
+        mode: 'full',
+        chooseScope: async (years) => {
+          const target = years.find(item => String(item.Name).match(/20\d{2}/)?.[0] === year || String(item.Id) === year);
+          if (!target) throw new Error('СУШ не предоставил данные за выбранный учебный год.');
+          return { yearId: target.Id, view: 'year' };
+        },
+      });
+
+      if (result.captchaRequired) {
+        return reply({
+          code: 'sush_captcha_required',
+          captchaRequired: true,
+          captchaType: result.captchaType ?? 1,
+          captchaData: result.captchaData ?? null,
+          sessionToken: result.sessionToken ?? null,
+          error: result.message || 'СУШ запросил подтверждение (CAPTCHA).',
+        }, 428);
+      }
+
+      if (!result.success || !result.grades) {
+        return reply({
+          error: result.message || 'СУШ не вернул оценки за этот учебный год.',
+        }, 422);
+      }
+
+      return reply({
+        success: true,
+        year,
+        grades: result.grades,
+      });
+    }
+
     const result = await scrapeSush({
       client,
       iin: input.login,
