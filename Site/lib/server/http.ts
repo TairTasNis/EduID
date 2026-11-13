@@ -1,7 +1,7 @@
 import 'server-only';
 
 export class HttpError extends Error {
-  constructor(readonly status: number, message: string) { super(message); }
+  constructor(readonly status: number, message: string, readonly code?: string) { super(message); }
 }
 
 export function configurationError(...settings: string[]) {
@@ -24,7 +24,7 @@ export function json(data: unknown, status = 200) {
 }
 
 export function failure(error: unknown) {
-  if (error instanceof HttpError) return json({ error: error.message }, error.status);
+  if (error instanceof HttpError) return json({ error: error.message, code: error.code }, error.status);
   console.error('EduID request failed', error instanceof Error ? error.name : 'unknown');
   return json({ error: 'Сервис EduID пока недоступен. Попробуйте позже.' }, 503);
 }

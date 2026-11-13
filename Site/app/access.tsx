@@ -775,8 +775,22 @@ export function Access() {
       if (audience === 'student') {
         const response = await fetch('/api/student', { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: mode, source, login: fields.get('login'), password, region: fields.get('region') || undefined, consent: fields.has('consent') }) });
-        const { token, profile: loadedProfile } = await readResponse(response);
-        await signInWithCustomToken(auth, token);
+        const result = await response.json().catch(() => null);
+        if (!response.ok) {
+          if (result?.code === 'account_exists') setMode('login');
+          if (result?.code === 'registration_required') setMode('register');
+          const fallback = response.status === 504
+            ? 'Проверка школьного аккаунта заняла слишком много времени. Попробуйте ещё раз.'
+            : 'Сервер EduID не ответил. Попробуйте ещё раз.';
+          throw new Error(result?.error || fallback);
+        }
+        if (!result?.token) throw new Error('EduID не вернул данные для входа. Попробуйте ещё раз.');
+        const { token, profile: loadedProfile } = result;
+        await signInWithCustomToken(auth, token).catch((error: unknown) => {
+          const code = (error as { code?: string })?.code;
+          if (code === 'auth/network-request-failed') throw new Error('Браузер не смог подключиться к Firebase. Проверьте подключение и повторите вход.');
+          throw new Error('EduID подтвердил данные, но не смог открыть сессию. Повторите вход.');
+        });
         setProfile(loadedProfile);
       } else {
         const email = String(fields.get('email') ?? '').trim().toLowerCase();

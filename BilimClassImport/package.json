@@ -8,8 +8,5 @@
   },
   "engines": {
     "node": ">=20"
-  },
-  "dependencies": {
-    "playwright-core": "1.65.0"
   }
 }

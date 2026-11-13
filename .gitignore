@@ -3,4 +3,5 @@ node_modules/
 .env*
 !Site/.env.example
 *.log
+exports/
 

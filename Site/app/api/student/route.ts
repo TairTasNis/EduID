@@ -29,24 +29,27 @@ export async function POST(request: Request) {
     const { uid } = identity;
     const { auth, db } = firebaseAdmin();
 
-    const rate = await db.ref(`rateLimits/${uid}`).transaction((current: { count: number; since: number } | null) => {
-      const now = Date.now();
-      if (!current || now - current.since > 10 * 60_000) return { count: 1, since: now };
-      if (current.count >= 6) return;
-      return { ...current, count: current.count + 1 };
-    });
-    if (!rate.committed) throw new HttpError(429, 'Слишком много попыток. Попробуйте через 10 минут.');
+    const limitSchoolAttempts = async () => {
+      const rate = await db.ref(`rateLimits/${uid}`).transaction((current: { count: number; since: number } | null) => {
+        const now = Date.now();
+        if (!current || now - current.since > 10 * 60_000) return { count: 1, since: now };
+        if (current.count >= 6) return;
+        return { ...current, count: current.count + 1 };
+      });
+      if (!rate.committed) throw new HttpError(429, 'Слишком много проверок школьного аккаунта. Попробуйте через 10 минут.');
+    };
 
     const student = db.ref(`students/${uid}`);
     const profileRef = student.child('profile');
     let profile = (await profileRef.get()).val();
     let years: string[] | undefined = profile?.schoolYears;
     if (action === 'login') {
-      if (!profile) throw new HttpError(404, 'Аккаунт EduID ещё не создан. Откройте регистрацию.');
+      if (!profile) throw new HttpError(404, 'Аккаунт EduID ещё не создан. Откройте регистрацию.', 'registration_required');
       if (!await verifyStudentPassword(identity)) {
         const existing = await studentAuthRecord(auth, uid);
         if (existing?.disabled) throw new HttpError(403, 'Аккаунт EduID отключён.');
         if (existing?.email) throw new HttpError(401, 'Проверьте логин и пароль EduID.');
+        await limitSchoolAttempts();
         const school = await loadProfile(account);
         await provisionStudentAuth(auth, identity);
         years = school.years;
@@ -58,7 +61,8 @@ export async function POST(request: Request) {
         });
       }
     } else {
-      if (profile) throw new HttpError(409, 'Аккаунт EduID уже создан. Откройте вход.');
+      if (profile) throw new HttpError(409, 'Аккаунт EduID уже создан. Войдите с теми же данными.', 'account_exists');
+      await limitSchoolAttempts();
       const school = await loadProfile(account);
       years = school.years;
       const region = (parsed.data.region || '').trim() || (source === 'sush' ? 'Актюбинская область' : 'г. Астана');
@@ -66,7 +70,7 @@ export async function POST(request: Request) {
       profile = { ...school.profile, region, schoolYears: years, createdAt: now, importConsentAt: now, consentVersion: 1 };
       await provisionStudentAuth(auth, identity);
       const created = await profileRef.transaction(current => current ? undefined : profile);
-      if (!created.committed) throw new HttpError(409, 'Аккаунт EduID уже создан. Откройте вход.');
+      if (!created.committed) throw new HttpError(409, 'Аккаунт EduID уже создан. Войдите с теми же данными.', 'account_exists');
 
       after(async () => {
         await db.ref(leaderboardRevision).set(nextLeaderboardRevision()).catch(() => {});

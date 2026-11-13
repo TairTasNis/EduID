@@ -48,6 +48,7 @@ async function gradeApi(account: SchoolAccount, mode: 'profile' | 'history', yea
 }
 
 async function loadSchoolData(account: SchoolAccount, mode: 'profile' | 'history', year?: string, signal?: AbortSignal) {
+  const source = account.source === 'sush' ? 'СУШ' : 'BilimClass';
   let result = await gradeApi(account, mode, year, signal);
   if ([502, 503, 504].includes(result.status)) {
     await delay(1500, undefined, { signal });
@@ -58,16 +59,18 @@ async function loadSchoolData(account: SchoolAccount, mode: 'profile' | 'history
     result = await gradeApi(account, mode, year, signal);
   }
   if (result.status === 428 && result.payload.code === 'captcha_required') {
-    throw new HttpError(428, 'Школьный сервис запросил CAPTCHA. Попробуйте позже.');
+    throw new HttpError(428, `${source} запросил CAPTCHA. Откройте школьный сайт и проверьте, что можете войти там, затем повторите попытку в EduID.`);
   }
   if (result.status === 422) {
-    const source = account.source === 'sush' ? 'СУШ' : 'BilimClass';
     throw new HttpError(422, mode === 'profile'
       ? `${source} не подтвердил профиль ученика. Проверьте данные для входа и выбранный сервис.`
       : `${source} не вернул данные за выбранный год.`);
   }
   if (result.status === 429) throw new HttpError(429, 'Школьный сервис занят другим запросом. Попробуйте через минуту.');
-  if (result.status !== 200 || !result.payload.data) throw new HttpError(502, 'Школьный сервис не вернул нужные данные. Попробуйте позже.');
+  if (result.payload.code === 'sush_relay_offline') {
+    throw new HttpError(503, 'EduID временно не может подключиться к СУШ. Попробуйте позже.');
+  }
+  if (result.status !== 200 || !result.payload.data) throw new HttpError(502, `${source} не вернул данные. Попробуйте позже.`);
   return result.payload.data;
 }
 

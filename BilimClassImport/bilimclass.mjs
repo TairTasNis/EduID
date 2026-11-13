@@ -1,273 +1,217 @@
-import { setTimeout as delay } from 'node:timers/promises';
-import { chromium } from 'playwright-core';
+import { createHmac, randomBytes } from 'node:crypto';
 
 const origin = 'https://www.bilimclass.kz';
-const summaryPath = /^\/(\d{4})\/summary-estimates\/?$/;
-const timeout = 20_000;
+const api = 'https://api.bilimclass.kz';
+const diary = '/api/v4/os/clientoffice/diary';
+const sessionKey = randomBytes(32);
+const sessions = new Map();
+const sessionTtl = 75_000;
 
-function loadsGrades(request) {
-  if (!['xhr', 'fetch'].includes(request.resourceType())) return false;
-  const url = new URL(request.url());
-  if (url.hostname === 'api.bilimclass.kz') {
-    return /^\/api\/v\d+\/os\/clientoffice\/(?:diary\/(?:subjects|periods)|group-list)\/?$/.test(url.pathname);
-  }
-  return ['journal-service.bilimclass.kz', 'journal-service-past.bilimclass.kz'].includes(url.hostname)
-    && /^\/diary\/quarter\/?$/.test(url.pathname);
-}
-
-export async function launchBrowser(visible = false) {
-  for (const channel of ['msedge', 'chrome']) {
-    try {
-      return await chromium.launch({ channel, headless: !visible });
-    } catch {
-      // Try the other installed browser if this one cannot start.
-    }
-  }
-  throw new Error('Не удалось запустить Microsoft Edge или Google Chrome.');
-}
-
-export class BilimClass {
-  constructor(page) {
-    this.page = page;
-    page.setDefaultTimeout(timeout);
-    this.yearToggle = page.locator('.v-set-year-global__select-wrap');
-    this.selectedYear = this.yearToggle.locator('.v-set-year-global__year');
-    this.yearOptions = page.locator('.v-set-year-global__options-item .v-set-year-global__year:visible');
-    this.filters = page.locator('[role=combobox]:has(input.vs__search):visible');
-    this.table = page.locator('table.v-adp-table:visible');
-
-    this.gradeRequests = new Set();
-    this.lastGradeActivity = 0;
-    this.gradeRequestFailed = false;
-    page.on('request', request => {
-      if (!loadsGrades(request)) return;
-      this.gradeRequests.add(request);
-      this.lastGradeActivity = performance.now();
-    });
-    const finish = request => {
-      if (!this.gradeRequests.delete(request)) return;
-      this.lastGradeActivity = performance.now();
-      const failure = request.failure()?.errorText;
-      if (failure && failure !== 'net::ERR_ABORTED') this.gradeRequestFailed = true;
-    };
-    page.on('requestfinished', finish);
-    page.on('requestfailed', finish);
-    page.on('response', response => {
-      if (this.gradeRequests.has(response.request()) && response.status() >= 400) {
-        this.gradeRequestFailed = true;
-      }
-    });
-  }
-
-  async waitForGrades() {
-    // The site updates its selection before the replacement table has loaded.
-    const started = performance.now();
-    while (performance.now() - started < timeout) {
-      const idleFor = performance.now() - Math.max(started, this.lastGradeActivity);
-      if (!this.gradeRequests.size && idleFor >= 450) {
-        if (this.gradeRequestFailed) throw new Error('BilimClass вернул ошибку при загрузке оценок. Повторите выгрузку.');
-        return;
-      }
-      await delay(50);
-    }
-    throw new Error('BilimClass не успел загрузить оценки. Повторите выгрузку.');
-  }
-
-  async login(username, password) {
-    const page = this.page;
-    const dateParts = new Intl.DateTimeFormat('en', {
-      timeZone: 'Asia/Oral', year: 'numeric', month: 'numeric',
-    }).formatToParts(new Date());
-    const calendarYear = Number(dateParts.find(part => part.type === 'year').value);
-    const month = Number(dateParts.find(part => part.type === 'month').value);
-    const year = calendarYear - (month < 9 ? 1 : 0);
-    const gradesUrl = `${origin}/${year}/summary-estimates?type=current`;
-    const passwordField = page.locator('input[type=password]:visible');
-    try {
-      await page.goto(gradesUrl, { waitUntil: 'domcontentloaded' });
-      await passwordField.or(this.selectedYear).first().waitFor();
-    } catch {
-      throw new Error('Страница входа BilimClass не загрузилась. Проверьте интернет и доступность сайта.');
-    }
-
-    if (await passwordField.isVisible()) {
-      if (new URL(page.url()).origin !== origin || new URL(page.url()).pathname !== '/login') {
-        throw new Error('BilimClass открыл неизвестную страницу входа.');
-      }
-      try {
-        await page.locator('input[type=text]:visible').fill(username);
-        await passwordField.fill(password);
-        await page.getByRole('button', { name: /^(?:Войти|Кіру)$/iu }).click();
-        await page.waitForURL(url => url.origin === origin && url.pathname !== '/login', { timeout });
-      } catch {
-        throw new Error('BilimClass не завершил вход. Проверьте логин и пароль, затем попробуйте снова.');
-      }
-    }
-
-    if (!summaryPath.test(new URL(page.url()).pathname)) {
-      await page.goto(gradesUrl, { waitUntil: 'domcontentloaded' });
-    }
-    try {
-      await this.selectedYear.waitFor();
-      await this.filters.nth(1).waitFor();
-    } catch {
-      throw new Error('Сводные оценки недоступны для этого аккаунта или учебного года.');
-    }
-  }
-
-  async chooseYear(choose) {
-    const current = await this.selectedYear.innerText();
-    const invitation = this.page.locator('[data-gl-modal-window=VParentsAddModalWindow]:visible');
-    await invitation.waitFor({ timeout: 1500 }).catch(() => {});
-    if (await invitation.isVisible()) {
-      await invitation.locator('.gl-modal-window__close').click();
-      await invitation.waitFor({ state: 'hidden' });
-    }
-    await this.yearToggle.click();
-    await this.yearOptions.first().waitFor();
-    const years = (await this.yearOptions.allInnerTexts()).map(label => label.trim());
-    await this.yearToggle.click();
-    const year = await choose('Учебный год', years, current.trim());
-    if (year !== current.trim()) {
-      await this.yearToggle.click();
-      await this.yearOptions.and(this.page.getByText(year, { exact: true })).click();
-      const startYear = year.match(/^\d{4}/)?.[0];
-      await this.page.waitForURL(url => url.origin === origin && summaryPath.exec(url.pathname)?.[1] === startYear);
-      await this.selectedYear.and(this.page.getByText(year, { exact: true })).waitFor();
-    }
-    return year;
-  }
-
-  async openFilter(box, prompt) {
-    const input = box.locator('input.vs__search');
-
-    // The open list can be moved outside the selector. A class change can replace its ID.
-    for (let attempt = 0; attempt < 3; attempt++) {
-      if (await box.getAttribute('aria-expanded') !== 'true') {
-        await input.blur();
-        await input.focus();
-      }
-      const listId = await box.getAttribute('aria-owns');
-      const list = this.page.locator(`[role=listbox][id=${JSON.stringify(listId ?? '')}]`);
-      try {
-        await list.getByRole('option').first().waitFor({ timeout: 1800 });
-        return list;
-      } catch {
-        continue;
-      }
-    }
-    throw new Error(`BilimClass не открыл список «${prompt}».`);
-  }
-
-  async chooseFilter(index, prompt, choose) {
-    const box = this.filters.nth(index);
-    const selected = box.locator('.vs__selected');
-    const current = (await selected.innerText()).trim();
-    const list = await this.openFilter(box, prompt);
-    const labels = (await list.getByRole('option').allInnerTexts()).map(label => label.trim());
-    await box.locator('input.vs__search').blur();
-    const label = await choose(prompt, labels, current);
-
-    if (label !== (await selected.innerText()).trim()) {
-      const activeList = await this.openFilter(box, prompt);
-      // The menu is rendered in a portal that can overlap the header in a background browser.
-      await activeList.getByRole('option', { name: label, exact: true }).dispatchEvent('click');
-      await selected.and(this.page.getByText(label, { exact: true })).waitFor();
-    }
-    return label;
-  }
-
-  async importGrades(choose) {
-    const academicYear = await this.chooseYear(choose);
-    await this.waitForGrades();
-    const className = await this.chooseFilter(0, 'Класс', choose);
-    await this.waitForGrades();
-    const quarterLabel = await this.chooseFilter(1, 'Четверть', choose);
-    const quarter = Number(quarterLabel.match(/\b[1-4]\b/)?.[0]);
-    if (!quarter) throw new Error('Не удалось определить номер выбранной четверти.');
-
-    await this.waitForGrades();
-    await this.table.locator('thead th').nth(7).waitFor();
-    await this.table.locator('tbody').first().waitFor({ state: 'attached' });
-    const subjects = await this.table.evaluate(parseGrades);
-    return {
-      schemaVersion: 2,
-      source: { name: 'BilimClass', url: this.page.url() },
-      academicYear,
-      class: className,
-      quarter,
-      exportedAt: new Date().toISOString(),
-      subjects,
-    };
+export class BilimClassError extends Error {
+  constructor(status, message, options) {
+    super(message);
+    this.status = status;
+    this.options = options;
   }
 }
 
-export function parseGrades(table) {
-  const clean = value => value.trim().replace(/\s+/g, ' ');
-  const parseValue = value => {
-    const text = clean(value);
-    if (!text || /^[-–—]$/.test(text)) return null;
-    if (/^\d+(?:[.,]\d+)?\s*%?$/.test(text)) return Number(text.replace('%', '').replace(',', '.'));
-    return text;
-  };
-  const parseMark = (value, label = '') => {
-    const text = clean(value);
-    const type = clean(label) || null;
-    const fraction = /^([^/]+)\/\s*(\d+(?:[.,]\d+)?)$/.exec(text);
-    const points = parseValue(fraction ? fraction[1] : text);
-    const max = fraction ? parseValue(fraction[2]) : null;
-    let kind = 'other';
-    if (/^(?:БЖБ|СОР)(?:\s|$)/iu.test(type ?? '')) kind = 'sor';
-    else if (/^(?:ТЖБ|СОЧ)(?:\s|$)/iu.test(type ?? '')) kind = 'soch';
-    else if (/^(?:ФБ|ФО)$/iu.test(type ?? '') || (!type && max === null && typeof points === 'number')) kind = 'formative';
-    return {
-      type,
-      kind,
-      value: points,
-      max,
-      percent: typeof points === 'number' && max > 0 ? Number((100 * points / max).toFixed(2)) : null,
-    };
-  };
-
-  const headers = [...table.tHead.rows[0].cells].map(cell => clean(cell.innerText));
-  if (headers.length !== 8 || headers[0] !== '№' || !/^(?:Пән|Предмет)$/iu.test(headers[1])) {
-    throw new Error('BilimClass изменил структуру таблицы оценок.');
-  }
-  const rows = [...table.tBodies].flatMap(body => [...body.rows]);
-  if (rows.length === 1 && rows[0].cells.length === 1 && rows[0].cells[0].colSpan === headers.length) {
-    if (/нет данных|нет предметов|данные отсутствуют|деректер жоқ|мәліметтер жоқ|пәндер жоқ|no data/iu.test(rows[0].cells[0].innerText)) {
-      return [];
-    }
-    throw new Error('BilimClass не показал данные за выбранную четверть.');
-  }
-  return rows.map(row => {
-    const cells = [...row.cells];
-    if (cells.length !== headers.length || !/^\d+$/.test(clean(cells[0].innerText)) || !clean(cells[1].innerText)) {
-      throw new Error('BilimClass изменил структуру строки оценок.');
-    }
-    const marks = [...cells[2].querySelectorAll('.flex-wrap > div')].map(chip => {
-      const value = chip.querySelector(':scope > span');
-      const label = chip.querySelector(':scope > div');
-      return parseMark(value?.innerText ?? chip.innerText, label?.innerText);
-    });
-    if (!marks.length && parseValue(cells[2].innerText) !== null) {
-      throw new Error('BilimClass изменил формат отдельных оценок.');
-    }
-    const formativePercent = parseValue(cells[3].innerText);
-    const sorPercent = parseValue(cells[4].innerText);
-    const sochPercent = parseValue(cells[5].innerText);
-    // The site has already applied the weights for this subject and period.
-    const contributions = [formativePercent, sorPercent, sochPercent].filter(value => typeof value === 'number');
-    const totalPercent = contributions.length ? Number(contributions.reduce((sum, value) => sum + value, 0).toFixed(2)) : null;
-    return {
-      subject: clean(cells[1].innerText),
-      marks,
-      formativePercent,
-      sorPercent,
-      sochPercent,
-      totalPercent,
-      predictedGrade: parseValue(cells[6].innerText),
-      finalGrade: parseValue(cells[7].innerText),
-    };
+async function request(host, path, { query, token, schoolId, login, journal } = {}) {
+  const url = new URL(path, host);
+  if (query) url.search = new URLSearchParams(query);
+  const headers = { Accept: 'application/json', Origin: origin, 'X-Localization': 'ru' };
+  if (schoolId) headers['X-School-Id'] = String(schoolId);
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (journal) headers.external = '1';
+  if (login) headers['Content-Type'] = 'application/json';
+  const response = await fetch(url, {
+    method: login ? 'POST' : 'GET', headers, body: login ? JSON.stringify(login) : undefined,
+    redirect: 'error', signal: AbortSignal.timeout(12_000),
   });
+  if (response.status === 429) throw new BilimClassError(429, 'BilimClass ограничил частоту запросов. Попробуйте позже.');
+  if (login && [400, 401, 403, 422].includes(response.status)) {
+    throw new BilimClassError(422, 'BilimClass отклонил вход. Проверьте логин и пароль.');
+  }
+  if (!response.ok) throw new BilimClassError(502, 'BilimClass не вернул данные.');
+  return response.json();
+}
+
+const academicYear = year => `${year}-${Number(year) + 1}`;
+const classKey = label => label.normalize('NFKC').toUpperCase().replace(/\s*(?:КЛАСС|СЫНЫП)\s*$/u, '').replace(/[\s-]/gu, '');
+const schoolClass = /^(?:1[0-2]|[1-9])\s*[-–]?\s*[«"„]?\s*\p{L}[»"“]?(?:\s+(?:класс|сынып))?$/iu;
+const round = value => Number(value.toFixed(2));
+const gradeFor = percent => percent >= 85 ? 5 : percent >= 65 ? 4 : percent >= 40 ? 3 : 2;
+
+function journalDate(value) {
+  const match = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(value);
+  if (!match) throw new BilimClassError(502, 'BilimClass не вернул даты четверти.');
+  const [, day, month, year] = match;
+  return `${year}-${month}-${day}T00:00:00.000Z`;
+}
+
+const labels = { regular: 'ФО', sor: 'СОР', soch: 'СОЧ', po: 'ПО' };
+const kinds = { regular: 'formative', sor: 'sor', soch: 'soch', po: 'other' };
+const attendanceLabels = { missing_without_reason: 'Н', missing_by_sick: 'Б', missing_due: 'У' };
+const finalLabels = { unattestated: 'Временно не аттестован', not_certified: 'Н/А', exemption: 'Осв.', notstudy: 'Не изучал', mastered: 'Освоил', not_mastered: 'Не освоил' };
+
+function finalGradeFor(row) {
+  const score = String(row.finalScore ?? '').trim();
+  if (row.scoreType === 'no_score') return 'Без оценки';
+  if (row.scoreType === 'credit' && (score === '0' || score === '1')) return score === '1' ? 'Зачёт' : 'Незачёт';
+  return /^[2-5]$/.test(score) ? Number(score) : finalLabels[score] ?? null;
+}
+
+function readSubject(row, marksBySchedule, poMode) {
+  const marks = row.schedules.flatMap(({ uuid, type, markMax }) => {
+    const journal = marksBySchedule[uuid];
+    const mark = type === 'regular' ? journal?.formattedScore : journal?.[type];
+    const value = mark?.mark ?? attendanceLabels[journal?.attendance];
+    if (value == null) return [];
+    const max = type === 'regular' ? null : mark?.markMax ?? markMax ?? null;
+    return [{
+      type: labels[type] ?? null, kind: kinds[type] ?? 'other', value, max,
+      percent: typeof value === 'number' && max > 0 ? round(100 * value / max) : null,
+    }];
+  });
+  const valid = marks.filter(mark => typeof mark.value === 'number' && mark.value >= 0);
+  const regular = valid.filter(mark => mark.kind === 'formative');
+  const formative = regular.length ? regular.reduce((sum, mark) => sum + mark.value, 0) / regular.length : null;
+  const ratio = type => {
+    const values = valid.filter(mark => mark.type === type && mark.max > 0);
+    const max = values.reduce((sum, mark) => sum + mark.max, 0);
+    return max ? 100 * values.reduce((sum, mark) => sum + mark.value, 0) / max : null;
+  };
+  let formativePercent = null;
+  let sorPercent = null;
+  let sochPercent = null;
+  let poPercent = null;
+  let totalPercent = null;
+  let predictedGrade = null;
+  if (poMode) {
+    const po = ratio('ПО');
+    formativePercent = formative === null ? null : round(formative * (po === null ? 10 : 5));
+    poPercent = po === null ? null : round(po * 0.5);
+    if (formativePercent !== null && poPercent !== null && !['credit', 'no_score'].includes(row.scoreType)) {
+      totalPercent = round(formativePercent + poPercent);
+    }
+  } else if (formative !== null) {
+    if (row.schedules.find(mark => mark.type === 'regular' && mark.markMax)?.markMax === 5) {
+      predictedGrade = Math.round(formative);
+    } else {
+      const sor = ratio('СОР');
+      const soch = sor === null ? null : ratio('СОЧ');
+      formativePercent = round(formative * (sor === null ? 10 : soch === null ? 5 : 2.5));
+      sorPercent = sor === null ? null : round(sor * (soch === null ? 0.5 : 0.25));
+      sochPercent = soch === null ? null : round(soch * 0.5);
+      totalPercent = round(formativePercent + (sorPercent ?? 0) + (sochPercent ?? 0));
+      predictedGrade = gradeFor(Math.round(formative * (sor === null ? 10 : soch === null ? 5 : 2.5) +
+        (sor ?? 0) * (soch === null ? 0.5 : 0.25) + (soch ?? 0) * 0.5));
+    }
+  }
+  if (predictedGrade === null && totalPercent !== null) predictedGrade = gradeFor(Math.round(totalPercent));
+  const finalGrade = finalGradeFor(row);
+  return { subject: row.subjectName, marks, formativePercent, sorPercent, sochPercent, poPercent, totalPercent, predictedGrade, finalGrade };
+}
+
+async function authenticate(login, password) {
+  const auth = await request(api, '/api/v2/os/login', { login: { login, password } });
+  const user = auth.user_info;
+  if (!auth.access_token || !user || user.show2factorModal) {
+    throw new BilimClassError(422, 'BilimClass не подтвердил вход. Проверьте данные и дополнительное подтверждение в BilimClass.');
+  }
+  if (user.role !== 'student') throw new BilimClassError(422, 'Выберите учётную запись ученика BilimClass.');
+  const years = [...new Set((user.school?.eduYears ?? [])
+    .filter(year => ['active', 'archive'].includes(year.status) && /^20\d{2}$/.test(year.eduYear))
+    .map(year => String(year.eduYear)))].sort((a, b) => Number(b) - Number(a));
+  const currentYear = String(user.school?.eduYears?.find(year => year.isCurrent)?.eduYear ?? years[0]);
+  const fullName = user.studentInfo?.fullname || [user.lastname, user.firstname, user.surname].filter(Boolean).join(' ');
+  const className = user.group?.name;
+  if (!fullName || !className || !years.length || !user.school_id) throw new BilimClassError(422, 'BilimClass не вернул профиль ученика.');
+  return { user, accessToken: auth.access_token, currentYear, profile: { fullName, className, years } };
+}
+
+async function getSession(login, password, verify) {
+  const now = Date.now();
+  for (const [key, session] of sessions) if (now >= session.expiresAt) sessions.delete(key);
+  const key = createHmac('sha256', sessionKey).update(JSON.stringify([login, password])).digest('hex');
+  const previous = sessions.get(key);
+  if (previous && !verify) return previous.data;
+  sessions.delete(key);
+  const data = await authenticate(login, password);
+  if (sessions.size >= 100) sessions.delete(sessions.keys().next().value);
+  sessions.set(key, { data, expiresAt: now + sessionTtl });
+  return data;
+}
+
+function select(items, match, field) {
+  const item = items.find(match);
+  if (!item) throw new BilimClassError(422, `Выбранное значение ${field} недоступно.`, items.map(item => item.label));
+  return item;
+}
+
+export async function importBilimClass(input) {
+  const session = await getSession(input.login, input.password, input.mode === 'profile');
+  const { user, accessToken, profile, currentYear } = session;
+  if (input.mode === 'profile') return profile;
+  const year = input.year ?? currentYear;
+  if (!profile.years.includes(year)) throw new BilimClassError(422, 'Учебный год недоступен.', profile.years.map(academicYear));
+  const query = { schoolId: user.school_id, eduYear: year };
+  const options = { token: accessToken, schoolId: user.school_id };
+  const [groupResponse, periodResponse] = await Promise.all([
+    request(api, '/api/v4/os/clientoffice/group-list', { ...options, query }),
+    request(api, `${diary}/periods`, { ...options, query }),
+  ]);
+  const groups = groupResponse.data;
+  const periods = periodResponse.data?.periods;
+  if (!Array.isArray(groups) || !Array.isArray(periods)) throw new BilimClassError(502, 'BilimClass не вернул классы или четверти.');
+  const group = input.class !== undefined
+    ? select(groups, group => classKey(group.label) === classKey(input.class), 'class')
+    : groups.find(group => group.value === user.group?.id) ?? groups.find(group => schoolClass.test(group.label)) ?? groups[0];
+  const quarters = periods.filter(p => p.periodType === 'quarter' && p.period >= 1 && p.period <= 4).sort((a, b) => a.period - b.period);
+  if (input.mode === 'options') {
+    return {
+      classes: groups.map(item => item.label),
+      currentClass: group?.label,
+      quarters: quarters.map(period => period.period),
+      currentQuarter: (quarters.find(period => period.isCurrent) ?? quarters[0])?.period,
+    };
+  }
+  if (!group || !quarters.length) {
+    if (input.mode === 'history') return { academicYear: academicYear(year), periods: [] };
+    throw new BilimClassError(422, 'BilimClass не вернул доступные классы и четверти.');
+  }
+  const selected = input.mode === 'history' ? quarters : [input.quarter === undefined
+    ? quarters.find(p => p.isCurrent) ?? quarters[0]
+    : select(quarters.map(p => ({ ...p, label: `${p.period} четверть` })), p => p.period === input.quarter, 'quarter')];
+  const groupUuids = [...new Set(user.studentInfo?.studentGroupUuids?.length
+    ? user.studentInfo.studentGroupUuids : [user.studentInfo?.studentGroupUuid].filter(Boolean))];
+  const journalHost = Number(year) <= 2025 ? 'https://journal-service-past.bilimclass.kz' : 'https://journal-service.bilimclass.kz';
+  const poMode = Number(year) >= 2026 && [2, 3, 4].includes(Number.parseInt(group.label, 10));
+  const data = [];
+  for (const period of selected) {
+    const { data: subjects } = await request(api, `${diary}/subjects`, {
+      ...options, query: { ...query, groupId: group.value, period: period.period, periodType: 'quarter' },
+    });
+    if (!Array.isArray(subjects)) throw new BilimClassError(502, 'BilimClass не вернул предметы.');
+    let marksBySchedule = {};
+    if (subjects.some(subject => subject.schedules?.length)) {
+      const earlier = period.period % 2 === 0 ? quarters.find(p => p.period === period.period - 1) : undefined;
+      const dateFrom = journalDate(earlier?.periodStart ?? period.periodStart);
+      const dateTo = journalDate(period.periodEnd);
+      const journals = await Promise.all(groupUuids.map(studentGroupUuid => request(journalHost, '/diary/quarter', {
+        schoolId: user.school_id, token: user.chatToken, journal: true,
+        query: { ...query, userId: user.userId, studentGroupUuid, dateFrom, dateTo },
+      })));
+      if (journals.some(result => !result.data || typeof result.data !== 'object' ||
+        (Array.isArray(result.data) && result.data.length))) {
+        throw new BilimClassError(502, 'BilimClass не вернул оценки по занятиям.');
+      }
+      marksBySchedule = Object.assign({}, ...journals.map(result => result.data));
+    }
+    data.push({
+      schemaVersion: 2, source: { name: 'BilimClass', url: `${origin}/${year}/summary-estimates?type=current` },
+      academicYear: academicYear(year), class: group.label, quarter: period.period, exportedAt: new Date().toISOString(),
+      subjects: subjects.map(row => readSubject({ ...row, schedules: row.schedules ?? [] }, marksBySchedule, poMode)),
+    });
+  }
+  return input.mode === 'history' ? { academicYear: academicYear(year), periods: data } : data[0];
 }

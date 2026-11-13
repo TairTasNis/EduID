@@ -5,49 +5,8 @@ import { stdin, stdout } from 'node:process';
 import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { BilimClass, launchBrowser } from './bilimclass.mjs';
-
-function openConsole() {
-  let hideInput = false;
-  const output = new Writable({
-    write(chunk, encoding, callback) {
-      if (hideInput) callback();
-      else stdout.write(chunk, encoding, callback);
-    },
-  });
-  const reader = createInterface({ input: stdin, output, terminal: true });
-  const cancellation = new AbortController();
-  reader.once('close', () => cancellation.abort());
-  const ask = prompt => reader.question(prompt, { signal: cancellation.signal });
-
-  return {
-    ask,
-    async askPassword() {
-      stdout.write('Пароль (ввод скрыт): ');
-      hideInput = true;
-      try {
-        return await ask('');
-      } finally {
-        hideInput = false;
-        stdout.write('\n');
-      }
-    },
-    async choose(prompt, labels, current) {
-      if (!labels.length) throw new Error(`Список «${prompt}» пуст.`);
-      const defaultIndex = Math.max(0, labels.indexOf(current));
-      stdout.write(`\n${prompt}\n`);
-      labels.forEach((label, index) => stdout.write(`  ${index + 1}. ${label}\n`));
-      while (true) {
-        const answer = (await ask(`Выберите номер [${defaultIndex + 1}]: `)).trim();
-        if (!answer) return labels[defaultIndex];
-        const index = /^\d+$/.test(answer) ? Number(answer) - 1 : -1;
-        if (index >= 0 && index < labels.length) return labels[index];
-        stdout.write(`Введите номер от 1 до ${labels.length}.\n`);
-      }
-    },
-    close: () => reader.close(),
-  };
-}
+import { importBilimClass } from './bilimclass.mjs';
+import { openConsole } from './terminal.mjs';
 
 async function saveGrades(data) {
   const folder = fileURLToPath(new URL('./exports/', import.meta.url));
@@ -76,11 +35,14 @@ async function main() {
     const password = await ui.askPassword();
     if (!username || !password) throw new Error('Введите логин и пароль BilimClass.');
     stdout.write('Подключаюсь к BilimClass…\n');
-    browser = await launchBrowser(process.argv.includes('--visible'));
-    const context = await browser.newContext();
-    const bilimclass = new BilimClass(await context.newPage());
-    await bilimclass.login(username, password);
-    const data = await bilimclass.importGrades(ui.choose);
+    const account = { login: username, password };
+    const profile = await importBilimClass({ ...account, mode: 'profile' });
+    const years = profile.years.map(year => year + '–' + (Number(year) + 1));
+    const year = (await ui.choose('Учебный год', years)).slice(0, 4);
+    const options = await importBilimClass({ ...account, year, mode: 'options' });
+    const className = await ui.choose('Класс', options.classes, options.currentClass);
+    const quarter = Number(await ui.choose('Четверть', options.quarters.map(String), String(options.currentQuarter)));
+    const data = await importBilimClass({ ...account, year, class: className, quarter });
     const path = await saveGrades(data);
     stdout.write(`\nПредметов: ${data.subjects.length}\nФайл JSON: ${path}\n`);
   } finally {
