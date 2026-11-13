@@ -6,6 +6,7 @@ import { loadProfile } from '@/lib/server/school-api';
 import { leaderboardRevision, nextLeaderboardRevision } from '@/lib/server/leaderboard-revision';
 import { provisionStudentAuth, studentAuthRecord, studentIdentity, verifyStudentPassword } from '@/lib/server/student-auth';
 import { runImport, startImport } from '@/lib/server/student-import';
+import { verifySushProof } from '@/lib/server/sush-proof';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -63,7 +64,12 @@ export async function POST(request: Request) {
     } else {
       if (profile) throw new HttpError(409, 'Аккаунт EduID уже создан. Войдите с теми же данными.', 'account_exists');
       await limitSchoolAttempts();
-      const school = await loadProfile(account);
+      const verified = source === 'sush' ? verifySushProof(parsed.data.sushProof, account) : null;
+      if (verified) {
+        const consumed = await db.ref(`sushProofs/${verified.nonce}`).transaction(current => current ? undefined : Date.now());
+        if (!consumed.committed) throw new HttpError(401, 'Подтверждение уже использовано. Повторите регистрацию.');
+      }
+      const school = verified ? verified.school : await loadProfile(account);
       years = school.years;
       const region = (parsed.data.region || '').trim() || (source === 'sush' ? 'Актюбинская область' : 'г. Астана');
       const now = Date.now();

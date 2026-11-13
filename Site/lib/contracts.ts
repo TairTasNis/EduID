@@ -51,7 +51,7 @@ export type OrganizationStatus = {
 const businessId = z.string().trim().regex(/^\d{12}$/, 'Введите 12 цифр.');
 export const studentInput = z.object({
   action: z.enum(['login', 'register']), source: z.enum(schoolSources), login: z.string().trim().min(1).max(128),
-  password: z.string().min(1).max(256), consent: z.boolean().optional(), region: z.string().nullish(),
+  password: z.string().min(1).max(256), consent: z.boolean().optional(), region: z.string().nullish(), sushProof: z.string().max(3000).optional(),
 }).refine(input => input.source !== 'sush' || /^\d{12}$/.test(input.login));
 
 const publicMail = new Set(['gmail.com', 'googlemail.com', 'mail.ru', 'inbox.ru', 'list.ru', 'bk.ru', 'internet.ru',

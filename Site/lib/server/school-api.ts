@@ -109,6 +109,10 @@ async function loadSchoolData(account: SchoolAccount, mode: 'profile' | 'history
 
 export async function loadProfile(account: SchoolAccount) {
   const data = await loadSchoolData(account, 'profile') as Partial<SchoolProfileResponse>;
+  return normalizeSchoolProfile(account, data);
+}
+
+export function normalizeSchoolProfile(account: SchoolAccount, data: Partial<SchoolProfileResponse>) {
   const classLabel = typeof data.className === 'string' ? data.className.trim() : '';
   const match = /^(1[0-2]|[1-9])\s*[-–]?\s*[«"„]?\s*(\p{L})(?=[\s»"“]|$)/u.exec(classLabel);
   const fullName = typeof data.fullName === 'string' ? data.fullName.trim().replace(/\s+/g, ' ') : '';

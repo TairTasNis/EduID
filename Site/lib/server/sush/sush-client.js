@@ -201,10 +201,16 @@ export class SushClient {
   }
 
   async login(iin, password, captcha) {
-    await this.request(this.baseUrl, { retries: 1, timeoutMs: 10000 });
+    if (!captcha && !this.cookies.size) {
+      await this.request(this.baseUrl, { retries: 1, timeoutMs: 10000 });
+    }
 
     const form = { login: iin, password };
-    if (captcha) form.captcha = captcha;
+    if (captcha) {
+      form.captcha = captcha;
+      form.captchaInput = captcha;
+      form["g-recaptcha-response"] = captcha;
+    }
 
     const payload = await this.postJson(
       "/root/Account/LogOn",
@@ -216,19 +222,42 @@ export class SushClient {
       return { success: true };
     }
 
-    if ((payload.captchaType && payload.captchaData) || /капч|captcha/i.test(String(payload.message ?? ''))) {
+    const data = (payload.data && typeof payload.data === "object") ? payload.data : {};
+    const captchaType = data.captchaType ?? payload.captchaType;
+    const captchaData = data.captchaData ?? payload.captchaData;
+    const captchaOn = Boolean(
+      data.captchaOn ||
+      (captchaType && captchaData) ||
+      /капч|captcha/i.test(String(payload.message ?? ""))
+    );
+
+    if (captchaOn) {
       return {
         success: false,
         captchaRequired: true,
-        captchaType: payload.captchaType,
-        captchaData: payload.captchaData,
-        message: payload.message || "Требуется капча",
+        captchaType: captchaType ?? 1,
+        captchaData: captchaData || null,
+        message: payload.message || "Требуется ввод защитного кода",
       };
     }
 
     return {
       success: false,
-      message: payload.message || "Ошибка входа. Возможно, требуется капча.",
+      message: payload.message || "Ошибка входа. Проверьте логин и пароль.",
+    };
+  }
+
+  async refreshCaptcha() {
+    const payload = await this.postJson(
+      "/root/Account/RefreshRestoreCaptcha",
+      {},
+      { retries: 1, timeoutMs: 12000 },
+    );
+    const data = (payload.data && typeof payload.data === "object") ? payload.data : {};
+    return {
+      captchaType: data.captchaType ?? payload.captchaType ?? 1,
+      captchaData: data.captchaData ?? payload.captchaData ?? null,
+      message: payload.message || null,
     };
   }
 

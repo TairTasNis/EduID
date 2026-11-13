@@ -244,6 +244,11 @@ export function Access() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [sushCaptchaRequired, setSushCaptchaRequired] = useState(false);
+  const [sushCaptchaType, setSushCaptchaType] = useState<number | null>(null);
+  const [sushCaptchaData, setSushCaptchaData] = useState<string | null>(null);
+  const [sushSessionToken, setSushSessionToken] = useState<string | null>(null);
+  const [captchaInput, setCaptchaInput] = useState('');
+  const [refreshingCaptcha, setRefreshingCaptcha] = useState(false);
   const [notice, setNotice] = useState('');
 
   // Student Dashboard state
@@ -759,11 +764,39 @@ export function Access() {
     }
   }
 
-  function changeMode(value: Mode) { setMode(value); setError(''); setNotice(''); }
+  function changeMode(value: Mode) {
+    setMode(value);
+    setError('');
+    setNotice('');
+    setSushCaptchaRequired(false);
+    setSushCaptchaData(null);
+    setSushSessionToken(null);
+    setCaptchaInput('');
+  }
   function switchAudience() {
     setAudience(audience === 'student' ? 'organization' : 'student');
     changeMode(audience === 'student' ? 'register' : 'login');
   }
+
+  const refreshSushCaptcha = async () => {
+    if (refreshingCaptcha) return;
+    setRefreshingCaptcha(true);
+    try {
+      const res = await fetch('https://eduid-sush-verify.tasmukhambetov-t08.workers.dev/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'refresh_captcha', sessionToken: sushSessionToken }),
+      });
+      const data = await res.json().catch(() => null);
+      if (data?.captchaData) {
+        setSushCaptchaData(data.captchaData);
+        setSushCaptchaType(data.captchaType ?? 1);
+        if (data.sessionToken) setSushSessionToken(data.sessionToken);
+      }
+    } catch {} finally {
+      setRefreshingCaptcha(false);
+    }
+  };
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -772,11 +805,37 @@ export function Access() {
     const fields = new FormData(form);
     const password = String(fields.get('password') ?? '');
     setError(''); setNotice(''); setBusy(true);
-    setSushCaptchaRequired(false);
     try {
       if (audience === 'student') {
+        let sushProof: string | undefined;
+        if (mode === 'register' && source === 'sush' && fields.has('consent')) {
+          const verification = await fetch('https://eduid-sush-verify.tasmukhambetov-t08.workers.dev/verify', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              login: String(fields.get('login') ?? '').trim(),
+              password,
+              captcha: String(fields.get('captcha') ?? captchaInput ?? '').trim() || undefined,
+              sessionToken: sushSessionToken || undefined,
+            }),
+          });
+          const checked = await verification.json().catch(() => null);
+          if (!verification.ok || !checked?.proof) {
+            if (checked?.code === 'sush_captcha_required' || checked?.captchaRequired) {
+              setSushCaptchaRequired(true);
+              setSushCaptchaType(checked.captchaType ?? 1);
+              setSushCaptchaData(checked.captchaData ?? null);
+              if (checked.sessionToken) setSushSessionToken(checked.sessionToken);
+            }
+            throw new Error(checked?.error || 'Не удалось проверить профиль СУШ. Попробуйте позже.');
+          }
+          sushProof = checked.proof;
+          setSushCaptchaRequired(false);
+          setSushCaptchaData(null);
+          setSushSessionToken(null);
+          setCaptchaInput('');
+        }
         const response = await fetch('/api/student', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: mode, source, login: fields.get('login'), password, region: fields.get('region') || undefined, consent: fields.has('consent') }) });
+          body: JSON.stringify({ action: mode, source, login: fields.get('login'), password, region: fields.get('region') || undefined, consent: fields.has('consent'), sushProof }) });
         const result = await response.json().catch(() => null);
         if (!response.ok) {
           if (result?.code === 'sush_captcha_required') setSushCaptchaRequired(true);
@@ -2339,7 +2398,13 @@ export function Access() {
             </> : <>
               <fieldset className="school-picker"><legend>Школьный сервис</legend><div className="school-options">
                 {(Object.entries(providers) as [SchoolSource, string][]).map(([value, label]) => <label key={value}>
-                  <input type="radio" name="source" checked={source === value} onChange={() => setSource(value)} /><span>{label}</span>
+                  <input type="radio" name="source" checked={source === value} onChange={() => {
+                    setSource(value);
+                    setSushCaptchaRequired(false);
+                    setSushCaptchaData(null);
+                    setSushSessionToken(null);
+                    setCaptchaInput('');
+                  }} /><span>{label}</span>
                 </label>)}
               </div></fieldset>
               {registering && (
@@ -2355,6 +2420,58 @@ export function Access() {
                   placeholder={source === 'sush' ? '12 цифр' : 'Логин, выданный школой'} required />
               </Field>
               <Password organization={false} register={registering} />
+              {source === 'sush' && registering && sushCaptchaRequired && (
+                <div style={{ marginTop: '12px', padding: '12px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                  {sushCaptchaType === 2 ? (
+                    <div>
+                      <p style={{ margin: '0 0 8px', fontSize: '13px', color: '#334155' }}>
+                        СУШ запросил защитную проверку (reCAPTCHA). Откройте школьный сайт, выполните вход один раз, чтобы подтвердить, что вы не робот, затем вернитесь сюда и нажмите «Создать профиль»:
+                      </p>
+                      <a
+                        href="https://sms.akb.nis.edu.kz/"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-button"
+                        style={{ display: 'inline-block', fontWeight: 600, color: '#2563eb' }}
+                      >
+                        Открыть СУШ НИШ Актобе ↗
+                      </a>
+                    </div>
+                  ) : (
+                    <div>
+                      <span className="field-label" style={{ display: 'block', marginBottom: '6px' }}>Код с картинки СУШ</span>
+                      {sushCaptchaData && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                          <img
+                            src={`data:image/png;base64,${sushCaptchaData}`}
+                            alt="Код с картинки"
+                            style={{ height: '40px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+                          />
+                          <button
+                            type="button"
+                            onClick={refreshSushCaptcha}
+                            disabled={refreshingCaptcha}
+                            className="text-button"
+                            style={{ fontSize: '12px' }}
+                          >
+                            {refreshingCaptcha ? 'Обновляем…' : '↻ Обновить'}
+                          </button>
+                        </div>
+                      )}
+                      <Field label="Введите символы с картинки">
+                        <input
+                          name="captcha"
+                          value={captchaInput}
+                          onChange={e => setCaptchaInput(e.target.value)}
+                          placeholder="Символы с картинки"
+                          required
+                          autoFocus
+                        />
+                      </Field>
+                    </div>
+                  )}
+                </div>
+              )}
             </>}
             {!organization && registering && <label className="consent"><input type="checkbox" name="consent" required />
               <span>Разрешаю EduID получить данные моего профиля и оценки из выбранного школьного сервиса.</span></label>}

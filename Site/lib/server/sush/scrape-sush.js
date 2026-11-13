@@ -587,7 +587,7 @@ export async function scrapeSush({
 
     if (loginResult.captchaRequired) {
       pushTrace("captcha_required", { captchaType: loginResult.captchaType });
-      const newSessionToken = loginResult.captchaData ? encodeSessionToken(client.getCookies()) : undefined;
+      const newSessionToken = encodeSessionToken(client.getCookies());
       return result(false, {
         captchaRequired: true,
         captchaType: loginResult.captchaType,
